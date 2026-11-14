@@ -3,7 +3,12 @@
    Real-time snake draft via Supabase Realtime
    ============================================================ */
 
-import { getSupabase, api, getSession, getMe, isAdmin, toast, navigate, fmt } from './app.js';
+import { getSupabase, api, getSession, getMe, loadMe, isAdmin, toast, navigate, fmt } from './app.js';
+
+// Identify the user from the login session so a failed /api/me can't turn a member into a spectator
+function myUserId() {
+  return getMe()?.id || getSession()?.user?.id;
+}
 
 let leagueId = null;
 let draftState = null;
@@ -16,6 +21,7 @@ let filterSearch = '';
 // ── Entry point ──
 export async function initDraft(params) {
   leagueId = params.leagueId;
+  if (!getMe()) await loadMe();
   document.getElementById('app').innerHTML = renderShell();
   await loadDraft();
   subscribeRealtime();
@@ -53,8 +59,7 @@ function subscribeRealtime() {
 
 // ── Make a pick ──
 async function makePick(playerId) {
-  const me = getMe();
-  const myMemberId = draftState.members.find(m => m.user_id === me?.id)?.id;
+  const myMemberId = draftState.members.find(m => m.user_id === myUserId())?.id;
   if (!myMemberId) return;
   if (draftState.onTheClock?.id !== myMemberId && !isAdmin()) {
     toast('Not your turn', 'error');
@@ -74,8 +79,7 @@ async function makePick(playerId) {
 
 // ── Who can pick right now, and for whom ──
 function getPickingState() {
-  const me = getMe();
-  const myMember = draftState.members.find(m => m.user_id === me?.id);
+  const myMember = draftState.members.find(m => m.user_id === myUserId());
   const onClock = draftState.onTheClock;
   const canPick = !draftState.isDone && !!onClock && ((myMember && onClock.id === myMember.id) || isAdmin());
   // Roster rules (one per team, QB cap) apply to whoever the pick is for
@@ -123,7 +127,7 @@ function renderShell() {
       </a>
       <div class="navbar-right">
         <span id="draft-status-pill"></span>
-        <span class="nav-link" id="nav-user">${getMe()?.email?.split('@')[0] || ''}</span>
+        <span class="nav-link" id="nav-user">${(getMe()?.email || getSession()?.user?.email || '').split('@')[0]}</span>
         <button class="btn btn-ghost btn-sm" onclick="app.signOut()">Sign out</button>
       </div>
     </nav>
@@ -197,8 +201,7 @@ function renderClock() {
   const el = document.getElementById('on-clock-banner');
   if (!el) return;
   const { onTheClock, isDone, picks, totalPicks } = draftState;
-  const me = getMe();
-  const myMember = draftState.members.find(m => m.user_id === me?.id);
+  const myMember = draftState.members.find(m => m.user_id === myUserId());
   const pickNum = picks.length + 1;
 
   if (isDone) {
@@ -321,8 +324,7 @@ function renderDraftBoard() {
 
   el.innerHTML = sortedMembers.map(m => {
     const myPicks = picks.filter(p => p.member_id === m.id).sort((a, b) => a.pick_number - b.pick_number);
-    const me = getMe();
-    const isMe = m.user_id === me?.id;
+    const isMe = m.user_id === myUserId();
     return `
       <div style="margin-bottom:1rem;">
         <div class="flex items-center gap-2 mb-1">

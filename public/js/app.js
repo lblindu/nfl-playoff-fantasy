@@ -27,6 +27,16 @@ let _me = null;
 
 export function getSession() { return _session; }
 export function getMe()      { return _me; }
+
+// Loads /api/me; keeps the previous value if a refresh fails, and logs the reason
+export async function loadMe() {
+  try {
+    _me = await api('GET', '/me');
+  } catch (e) {
+    console.error('[auth] /api/me failed:', e.message);
+  }
+  return _me;
+}
 export function isAdmin()    { return _me?.isAdmin === true; }
 
 // ── API helper ──
@@ -121,18 +131,18 @@ export async function init() {
   _supabase.auth.onAuthStateChange(async (event, s) => {
     _session = s;
     if (s) {
-      _me = await api('GET', '/me').catch(() => null);
+      await loadMe();
       updateNavbar();
       if (location.pathname === '/login') navigate('/');
     } else {
-      _me = null;
+      _me = null; // signed out
       updateNavbar();
       if (location.pathname !== '/login') navigate('/login');
     }
   });
 
   if (session) {
-    _me = await api('GET', '/me').catch(() => null);
+    await loadMe();
   }
 
   updateNavbar();
