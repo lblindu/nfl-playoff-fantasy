@@ -72,13 +72,17 @@ router.post('/pull-teams', requireAdmin, async (req, res) => {
       confirmed: false,
     }));
 
-    const { data, error } = await supabase
-      .from('nfl_teams')
-      .upsert(rows, { onConflict: 'season,api_team_id' })
-      .select();
+    // Only insert teams we don't have yet, so re-pulling never resets in_playoffs/confirmed
+    const { data: existing } = await supabase
+      .from('nfl_teams').select('api_team_id').eq('season', parseInt(season));
+    const have = new Set((existing || []).map(t => t.api_team_id));
+    const fresh = rows.filter(r => !have.has(r.api_team_id));
 
-    if (error) return res.status(500).json({ error: error.message });
-    res.json({ imported: data.length, teams: data });
+    if (fresh.length) {
+      const { error } = await supabase.from('nfl_teams').insert(fresh);
+      if (error) return res.status(500).json({ error: error.message });
+    }
+    res.json({ imported: fresh.length, teams: fresh });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
