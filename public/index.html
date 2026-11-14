@@ -859,8 +859,8 @@
           <span class="navbar-title">Playoff <span>Fantasy</span></span>
         </a>
         <div class="navbar-right">
-          <a href="/admin" data-link class="nav-link" id="nav-admin-link" style="display:none;">Admin</a>
-          <span class="nav-link" id="nav-user"></span>
+          <a href="/admin" data-link class="nav-link" id="nav-admin-link" style="display:${isAdmin() ? 'inline-flex' : 'none'};">Admin</a>
+          <span class="nav-link" id="nav-user">${getMe()?.email?.split('@')[0] || ''}</span>
           <button class="btn btn-ghost btn-sm" onclick="app.signOut()">Sign out</button>
         </div>
       </nav>

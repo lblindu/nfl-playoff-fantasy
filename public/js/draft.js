@@ -93,7 +93,7 @@ function renderShell() {
       </a>
       <div class="navbar-right">
         <span id="draft-status-pill"></span>
-        <span class="nav-link" id="nav-user"></span>
+        <span class="nav-link" id="nav-user">${getMe()?.email?.split('@')[0] || ''}</span>
         <button class="btn btn-ghost btn-sm" onclick="app.signOut()">Sign out</button>
       </div>
     </nav>
