@@ -115,7 +115,15 @@ router.delete('/:id/members/:memberId', requireAdmin, async (req, res) => {
 
 // POST /api/leagues/:id/set-draft-order (admin only)
 router.post('/:id/set-draft-order', requireAdmin, async (req, res) => {
-  const { order } = req.body; // array of member IDs in draft order
+  let order = req.body.order; // array of member IDs in draft order; omitted = randomize
+  if (order === undefined) {
+    const { data: members } = await supabase.from('league_members').select('id').eq('league_id', req.params.id);
+    order = (members || []).map(m => m.id);
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+  }
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array of member IDs' });
 
   const updates = order.map((memberId, i) =>

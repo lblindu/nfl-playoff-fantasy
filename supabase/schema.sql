@@ -208,3 +208,6 @@ $$;
 create or replace trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
+
+-- Live draft: broadcast new picks over Supabase Realtime
+alter publication supabase_realtime add table public.draft_picks;

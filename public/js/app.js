@@ -178,6 +178,7 @@ export function fmt(n, decimals = 1) {
 
 export function statusPill(status) {
   const map = {
+    setup:    ['setup',    'Setup'],
     draft:    ['setup',    'Draft'],
     drafting: ['live',     'Drafting'],
     active:   ['active',   'Active'],

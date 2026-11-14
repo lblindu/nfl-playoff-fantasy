@@ -419,7 +419,7 @@
             ${statusPill(league.status)}
           </div>
           <div class="flex gap-2">
-            ${league.status === 'draft' || league.status === 'drafting' ? `<a href="/league/${id}/draft" data-link class="btn btn-primary">🎯 Enter Draft Room</a>` : ''}
+            ${league.status === 'setup' || league.status === 'drafting' ? `<a href="/league/${id}/draft" data-link class="btn btn-primary">🎯 Enter Draft Room</a>` : ''}
           </div>
         </div>
       `;
@@ -439,7 +439,7 @@
       try {
         const me = getMe();
         const league = await api('GET', `/leagues/${id}`);
-        const myMember = league.members?.find(m => m.user_id === me?.id);
+        const myMember = league.league_members?.find(m => m.user_id === me?.id);
         if (!myMember) { el.innerHTML = `<div class="empty-state"><div class="icon">👤</div><p>You are not a member of this league.</p></div>`; return; }
         const roster = await api('GET', `/scores/roster/${id}/${myMember.id}`);
         renderRoster(roster);
@@ -570,7 +570,7 @@
         <table class="admin-table">
           <thead><tr><th>Name</th><th>Email</th><th>Draft Order</th><th></th></tr></thead>
           <tbody>
-            ${(league.members || []).map(m => `
+            ${(league.league_members || []).map(m => `
               <tr>
                 <td>${m.display_name}</td>
                 <td style="color:var(--text-2);">${m.email || '—'}</td>
@@ -584,7 +584,7 @@
       <div class="admin-section">
         <div class="admin-section-header"><h3>League Status</h3></div>
         <div class="flex gap-2 flex-wrap">
-          ${['draft','drafting','active','complete'].map(s => `
+          ${['setup','drafting','active','complete'].map(s => `
             <button class="btn ${league.status === s ? 'btn-primary' : 'btn-ghost'} btn-sm" data-set-status="${s}">${s}</button>
           `).join('')}
         </div>
