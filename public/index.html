@@ -279,7 +279,7 @@
         <div class="page hero-inner">
           <div>
             <h1>Your Leagues</h1>
-            <p style="color:var(--text-2);margin-top:4px;">2026 NFL Playoffs</p>
+            <p style="color:var(--text-2);margin-top:4px;">NFL Playoffs</p>
           </div>
           ${isAdmin() ? `<button class="btn btn-primary" id="create-league-btn">+ New League</button>` : ''}
         </div>
@@ -316,7 +316,7 @@
         </div>
         <div class="league-meta">
           <span>📅 ${l.season} Season</span>
-          <span>👥 ${l.member_count ?? '?'} members</span>
+          <span>👥 ${l.league_members?.[0]?.count ?? 0} members</span>
         </div>
         <div class="league-card-footer">
           <span class="label">View league →</span>
@@ -702,6 +702,10 @@
           <div id="players-list"></div>
         </div>
       `;
+
+      const seasonInput = document.getElementById('admin-season');
+      seasonInput.addEventListener('change', () => loadTeamsList(seasonInput.value));
+      loadTeamsList(seasonInput.value);
 
       document.getElementById('pull-teams-btn')?.addEventListener('click', async () => {
         const season = document.getElementById('admin-season').value;
