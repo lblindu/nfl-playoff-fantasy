@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NFL Playoff Fantasy</title>
+  <link rel="stylesheet" href="/css/app.css" />
+  <style>
+    /* ── Login page ── */
+    .login-wrap {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+      background: radial-gradient(ellipse 80% 60% at 50% -20%, rgba(245,166,35,0.12) 0%, transparent 70%);
+    }
+    .login-card {
+      width: 100%;
+      max-width: 400px;
+      text-align: center;
+    }
+    .login-logo {
+      width: 72px;
+      height: 72px;
+      background: linear-gradient(135deg, var(--gold), #e08a0a);
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 36px;
+      margin: 0 auto 1.5rem;
+    }
+    .login-card h1 { margin-bottom: 6px; }
+    .login-card > p { color: var(--text-2); font-size: 14px; margin-bottom: 1.5rem; }
+
+    /* Auth tabs */
+    .auth-tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 1.25rem; }
+    .auth-tab {
+      flex: 1; padding: 8px; font-size: 13px; font-weight: 500; font-family: var(--font);
+      color: var(--text-2); background: none; border: none; border-bottom: 2px solid transparent;
+      margin-bottom: -1px; cursor: pointer; transition: all .12s;
+    }
+    .auth-tab:hover { color: var(--text); }
+    .auth-tab.active { color: var(--gold); border-bottom-color: var(--gold); }
+
+    .auth-panel { display: none; }
+    .auth-panel.active { display: flex; flex-direction: column; gap: 10px; }
+
+    .login-input {
+      width: 100%; height: 42px; padding: 0 14px;
+      background: var(--bg-raised); border: 1px solid var(--border-mid);
+      border-radius: var(--radius-sm); color: var(--text); font-size: 14px;
+      font-family: var(--font); outline: none; transition: border-color .12s; text-align: left;
+    }
+    .login-input:focus { border-color: var(--gold); }
+
+    .login-btn {
+      width: 100%; height: 44px; border-radius: var(--radius);
+      background: var(--gold); color: #000; border: none;
+      font-size: 15px; font-weight: 600; font-family: var(--font); cursor: pointer;
+      transition: background .1s;
+    }
+    .login-btn:hover { background: #e09a1f; }
+    .login-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    .auth-divider {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 11px; color: var(--text-3); margin: 4px 0;
+    }
+    .auth-divider::before, .auth-divider::after {
+      content: ''; flex: 1; height: 1px; background: var(--border);
+    }
+
+    .google-btn {
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      width: 100%; height: 44px;
+      background: var(--bg-raised); color: var(--text);
+      border: 1px solid var(--border-mid); border-radius: var(--radius);
+      font-size: 14px; font-weight: 500; font-family: var(--font);
+      cursor: pointer; transition: background .1s;
+    }
+    .google-btn:hover { background: var(--bg-hover); }
+    .google-btn svg { width: 18px; height: 18px; }
+
+    .auth-error {
+      font-size: 12px; color: var(--red); background: var(--red-dim);
+      border: 1px solid rgba(239,68,68,.25); border-radius: var(--radius-sm);
+      padding: 8px 12px; display: none;
+    }
+    .auth-error.visible { display: block; }
+
+    .login-footer {
+      margin-top: 1.5rem; font-size: 12px; color: var(--text-3);
+    }
+
+    /* ── Home / Lobby ── */
+    .hero {
+      padding: 3rem 0 2rem;
+      background: radial-gradient(ellipse 60% 40% at 50% 0%, rgba(245,166,35,0.08) 0%, transparent 60%);
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 2rem;
+    }
+    .hero-inner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+
+    .league-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; margin-bottom: 3rem; }
+    .league-card { display: flex; flex-direction: column; gap: 10px; }
+    .league-card-footer { display: flex; align-items: center; justify-content: space-between; margin-top: auto; }
+    .league-meta { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-2); }
+
+    /* ── Standings / League detail ── */
+    .standings-row {
+      display: grid;
+      grid-template-columns: 32px 1fr auto auto auto auto auto;
+      align-items: center;
+      gap: 0 10px;
+      padding: 10px 1rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      transition: background 0.1s;
+    }
+    .standings-row:hover { background: var(--bg-raised); }
+    .standings-row.header { font-size: 11px; font-weight: 600; color: var(--text-3); padding: 6px 1rem; }
+    .round-score { text-align: right; min-width: 44px; font-family: var(--font-mono); font-size: 12px; }
+
+    /* ── Roster modal / section ── */
+    .roster-player-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .roster-player-row:last-child { border-bottom: none; }
+
+    /* ── Admin panel ── */
+    .admin-section { margin-bottom: 2rem; }
+    .admin-section-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border);
+    }
+    .admin-table { width: 100%; border-collapse: collapse; }
+    .admin-table td, .admin-table th {
+      padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; text-align: left;
+    }
+    .admin-table th { font-size: 11px; font-weight: 600; color: var(--text-3); }
+  </style>
+</head>
+<body>
+
+<!-- Global: toast container -->
+<div id="toasts" class="toast-container"></div>
+
+<!-- App root (all pages render here) -->
+<div id="app"></div>
+
+
+<script type="module">
+  import { getSupabase, init, navigate, route, api, getMe, getSession, isAdmin, toast, signInWithGoogle, signOut, statusPill, posClass, fmt } from '/js/app.js';
+  import { initDraft, destroyDraft } from '/js/draft.js';
+
+  // Expose globally so inline onclick handlers can call them
+  window.app = { signOut, navigate };
+
+  // ── Routes ──
+  route('/login', renderLogin);
+  route('/',      renderHome);
+  route('/league/:id', renderLeague);
+  route('/league/:id/draft', renderDraftRoom);
+  route('/admin', renderAdmin);
+
+  // ── LOGIN ──
+  function renderLogin() {
+    const googleSvg = `<svg viewBox="0 0 24 24" width="18" height="18"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>`;
+
+    document.getElementById('app').innerHTML = `
+      <div class="login-wrap">
+        <div class="login-card">
+          <div class="login-logo">🏈</div>
+          <h1>Playoff Fantasy</h1>
+          <p>Pick your playoff roster, track your score, compete with your league.</p>
+
+          <div class="auth-tabs">
+            <button class="auth-tab active" data-auth-tab="signin">Sign in</button>
+            <button class="auth-tab" data-auth-tab="signup">Create account</button>
+          </div>
+
+          <!-- Sign in panel -->
+          <div class="auth-panel active" id="panel-signin">
+            <div id="signin-error" class="auth-error"></div>
+            <input class="login-input" id="signin-email" type="email" placeholder="Email address" autocomplete="email" />
+            <input class="login-input" id="signin-password" type="password" placeholder="Password" autocomplete="current-password" />
+            <button class="login-btn" id="signin-btn">Sign in</button>
+            <button class="btn btn-ghost btn-sm" id="forgot-btn" style="width:100%;font-size:12px;">Forgot password?</button>
+            <div class="auth-divider">or</div>
+            <button class="google-btn" id="google-signin">${googleSvg} Continue with Google</button>
+          </div>
+
+          <!-- Sign up panel -->
+          <div class="auth-panel" id="panel-signup">
+            <div id="signup-error" class="auth-error"></div>
+            <input class="login-input" id="signup-name" type="text" placeholder="Display name" autocomplete="name" />
+            <input class="login-input" id="signup-email" type="email" placeholder="Email address" autocomplete="email" />
+            <input class="login-input" id="signup-password" type="password" placeholder="Password (min 6 chars)" autocomplete="new-password" />
+            <button class="login-btn" id="signup-btn">Create account</button>
+            <div class="auth-divider">or</div>
+            <button class="google-btn" id="google-signup">${googleSvg} Continue with Google</button>
+          </div>
+
+          <p class="login-footer">By signing in you agree to play fair 🏆</p>
+        </div>
+      </div>
+    `;
+
+    // Tab switching
+    document.querySelectorAll('[data-auth-tab]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('[data-auth-tab]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const tab = btn.dataset.authTab;
+        document.getElementById('panel-signin').classList.toggle('active', tab === 'signin');
+        document.getElementById('panel-signup').classList.toggle('active', tab === 'signup');
+      });
+    });
+
+    // Sign in
+    document.getElementById('signin-btn').addEventListener('click', async () => {
+      const email = document.getElementById('signin-email').value.trim();
+      const password = document.getElementById('signin-password').value;
+      const errEl = document.getElementById('signin-error');
+      errEl.classList.remove('visible');
+      if (!email || !password) { errEl.textContent = 'Email and password required.'; errEl.classList.add('visible'); return; }
+      const btn = document.getElementById('signin-btn');
+      btn.disabled = true; btn.textContent = 'Signing in…';
+      const { error } = await getSupabase().auth.signInWithPassword({ email, password });
+      btn.disabled = false; btn.textContent = 'Sign in';
+      if (error) { errEl.textContent = error.message; errEl.classList.add('visible'); }
+    });
+
+    // Sign up
+    document.getElementById('signup-btn').addEventListener('click', async () => {
+      const name = document.getElementById('signup-name').value.trim();
+      const email = document.getElementById('signup-email').value.trim();
+      const password = document.getElementById('signup-password').value;
+      const errEl = document.getElementById('signup-error');
+      errEl.classList.remove('visible');
+      if (!name || !email || !password) { errEl.textContent = 'All fields required.'; errEl.classList.add('visible'); return; }
+      if (password.length < 6) { errEl.textContent = 'Password must be at least 6 characters.'; errEl.classList.add('visible'); return; }
+      const btn = document.getElementById('signup-btn');
+      btn.disabled = true; btn.textContent = 'Creating account…';
+      const { error } = await getSupabase().auth.signUp({ email, password, options: { data: { display_name: name } } });
+      btn.disabled = false; btn.textContent = 'Create account';
+      if (error) { errEl.textContent = error.message; errEl.classList.add('visible'); return; }
+      // On success Supabase fires onAuthStateChange → navigates to /
+      errEl.style.color = 'var(--green)'; errEl.textContent = 'Check your email to confirm your account.'; errEl.classList.add('visible');
+    });
+
+    // Forgot password
+    document.getElementById('forgot-btn').addEventListener('click', async () => {
+      const email = document.getElementById('signin-email').value.trim();
+      if (!email) { const e = document.getElementById('signin-error'); e.textContent = 'Enter your email first.'; e.classList.add('visible'); return; }
+      await getSupabase().auth.resetPasswordForEmail(email, { redirectTo: location.origin });
+      toast('Password reset email sent', 'success');
+    });
+
+    // Google
+    document.getElementById('google-signin').addEventListener('click', signInWithGoogle);
+    document.getElementById('google-signup').addEventListener('click', signInWithGoogle);
+  }
+
+  // ── HOME ──
+  async function renderHome() {
+    if (!getSession()) return navigate('/login');
+    destroyDraft();
+
+    document.getElementById('app').innerHTML = `
+      ${navbar()}
+      <div class="hero">
+        <div class="page hero-inner">
+          <div>
+            <h1>Your Leagues</h1>
+            <p style="color:var(--text-2);margin-top:4px;">2026 NFL Playoffs</p>
+          </div>
+          ${isAdmin() ? `<button class="btn btn-primary" id="create-league-btn">+ New League</button>` : ''}
+        </div>
+      </div>
+      <div class="page">
+        <div id="leagues-container"><div class="skeleton" style="height:120px;border-radius:var(--radius-lg);"></div></div>
+      </div>
+    `;
+
+    if (isAdmin()) {
+      document.getElementById('create-league-btn')?.addEventListener('click', () => showCreateLeagueModal());
+    }
+
+    try {
+      const leagues = await api('GET', '/leagues');
+      renderLeagueGrid(leagues);
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  function renderLeagueGrid(leagues) {
+    const el = document.getElementById('leagues-container');
+    if (!el) return;
+    if (!leagues.length) {
+      el.innerHTML = `<div class="empty-state"><div class="icon">🏟️</div><p>No leagues yet. ${isAdmin() ? 'Create the first one!' : 'Ask an admin to add you.'}</p></div>`;
+      return;
+    }
+    el.innerHTML = `<div class="league-grid">${leagues.map(l => `
+      <div class="card card-hover league-card" data-link onclick="app.navigate('/league/${l.id}')">
+        <div class="flex items-center justify-between">
+          <h3>${l.name}</h3>
+          ${statusPill(l.status)}
+        </div>
+        <div class="league-meta">
+          <span>📅 ${l.season} Season</span>
+          <span>👥 ${l.member_count ?? '?'} members</span>
+        </div>
+        <div class="league-card-footer">
+          <span class="label">View league →</span>
+          ${l.status === 'drafting' ? '<span class="pill pill-live"><span class="pill-dot pulse"></span>Draft Live</span>' : ''}
+        </div>
+      </div>
+    `).join('')}</div>`;
+  }
+
+  function showCreateLeagueModal() {
+    const html = `
+      <div id="modal-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:200;display:flex;align-items:center;justify-content:center;padding:1rem;">
+        <div class="card" style="width:100%;max-width:400px;">
+          <div class="flex items-center justify-between mb-2">
+            <h3>Create League</h3>
+            <button class="btn btn-ghost btn-sm" id="close-modal">✕</button>
+          </div>
+          <div class="form-group">
+            <label>League Name</label>
+            <input type="text" id="new-league-name" placeholder="e.g. Friday Night League" />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Season</label>
+              <input type="number" id="new-league-season" value="2026" />
+            </div>
+            <div class="form-group">
+              <label>Max Members</label>
+              <input type="number" id="new-league-max" value="10" />
+            </div>
+          </div>
+          <button class="btn btn-primary btn-full mt-2" id="submit-league">Create League</button>
+        </div>
+      </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', html);
+    document.getElementById('close-modal').addEventListener('click', () => document.getElementById('modal-overlay')?.remove());
+    document.getElementById('submit-league').addEventListener('click', async () => {
+      const name   = document.getElementById('new-league-name').value.trim();
+      const season = parseInt(document.getElementById('new-league-season').value);
+      const max    = parseInt(document.getElementById('new-league-max').value);
+      if (!name) return toast('Name required', 'error');
+      try {
+        await api('POST', '/leagues', { name, season, max_members: max });
+        document.getElementById('modal-overlay')?.remove();
+        toast('League created!', 'success');
+        renderHome();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  }
+
+  // ── LEAGUE DETAIL ──
+  let currentLeagueId = null;
+  let activeTab = 'standings';
+
+  async function renderLeague({ id }) {
+    if (!getSession()) return navigate('/login');
+    destroyDraft();
+    currentLeagueId = id;
+
+    document.getElementById('app').innerHTML = `
+      ${navbar()}
+      <div class="page" style="padding-top:1.5rem;">
+        <div id="league-header" class="mb-2">
+          <div class="skeleton" style="height:60px;border-radius:var(--radius);"></div>
+        </div>
+        <div class="tabs mb-3">
+          <button class="tab active" data-tab="standings">Standings</button>
+          <button class="tab" data-tab="roster">My Roster</button>
+          <button class="tab" data-tab="games">Games</button>
+          ${isAdmin() ? '<button class="tab" data-tab="manage">Manage</button>' : ''}
+        </div>
+        <div id="tab-content"></div>
+      </div>
+    `;
+
+    document.querySelectorAll('.tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        activeTab = btn.dataset.tab;
+        loadLeagueTab(id, activeTab);
+      });
+    });
+
+    await loadLeagueHeader(id);
+    await loadLeagueTab(id, activeTab);
+  }
+
+  async function loadLeagueHeader(id) {
+    try {
+      const league = await api('GET', `/leagues/${id}`);
+      const el = document.getElementById('league-header');
+      if (!el) return;
+      el.innerHTML = `
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <div class="flex items-center gap-3">
+            <a href="/" data-link style="color:var(--text-3);font-size:13px;text-decoration:none;">← Leagues</a>
+            <h2>${league.name}</h2>
+            ${statusPill(league.status)}
+          </div>
+          <div class="flex gap-2">
+            ${league.status === 'draft' || league.status === 'drafting' ? `<a href="/league/${id}/draft" data-link class="btn btn-primary">🎯 Enter Draft Room</a>` : ''}
+          </div>
+        </div>
+      `;
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function loadLeagueTab(id, tab) {
+    const el = document.getElementById('tab-content');
+    el.innerHTML = `<div class="skeleton" style="height:200px;border-radius:var(--radius-lg);"></div>`;
+
+    if (tab === 'standings') {
+      try {
+        const data = await api('GET', `/scores/standings/${id}`);
+        renderStandings(data);
+      } catch (e) { toast(e.message, 'error'); }
+    } else if (tab === 'roster') {
+      try {
+        const me = getMe();
+        const league = await api('GET', `/leagues/${id}`);
+        const myMember = league.members?.find(m => m.user_id === me?.id);
+        if (!myMember) { el.innerHTML = `<div class="empty-state"><div class="icon">👤</div><p>You are not a member of this league.</p></div>`; return; }
+        const roster = await api('GET', `/scores/roster/${id}/${myMember.id}`);
+        renderRoster(roster);
+      } catch (e) { toast(e.message, 'error'); }
+    } else if (tab === 'games') {
+      try {
+        const league = await api('GET', `/leagues/${id}`);
+        const games = await api('GET', `/scores/games?season=${league.season}`);
+        renderGames(games);
+      } catch (e) { toast(e.message, 'error'); }
+    } else if (tab === 'manage' && isAdmin()) {
+      try {
+        const league = await api('GET', `/leagues/${id}`);
+        renderManageTab(league);
+      } catch (e) { toast(e.message, 'error'); }
+    }
+  }
+
+  function renderStandings(members) {
+    const el = document.getElementById('tab-content');
+    const rounds = ['Wildcard', 'Divisional', 'Conference', 'Superbowl'];
+    el.innerHTML = `
+      <div class="card" style="padding:0;overflow:hidden;">
+        <div class="standings-row header">
+          <span>#</span>
+          <span>Member</span>
+          ${rounds.map(r => `<span class="round-score">${r.slice(0,3)}</span>`).join('')}
+          <span class="round-score" style="color:var(--gold);">Total</span>
+        </div>
+        ${members.map((m, i) => {
+          const roundScores = rounds.map(r => {
+            const rs = m.member_round_scores?.find(s => s.playoff_round === r);
+            return `<span class="round-score" style="color:var(--text-2);">${rs ? fmt(rs.points) : '—'}</span>`;
+          }).join('');
+          return `
+            <div class="standings-row" onclick="showMemberRoster('${m.id}')" style="cursor:pointer;">
+              <span class="rank rank-${i+1}">${i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i+1}</span>
+              <span style="font-weight:500;">${m.display_name}</span>
+              ${roundScores}
+              <span class="stat-num highlight">${fmt(m.total_score)}</span>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  function renderRoster(roster) {
+    const el = document.getElementById('tab-content');
+    const rounds = ['Wildcard', 'Divisional', 'Conference', 'Superbowl'];
+    el.innerHTML = `
+      <div class="card">
+        <h3 class="mb-2">My Roster</h3>
+        ${roster.map(r => {
+          const p = r.player;
+          const t = r.team;
+          return `
+            <div class="roster-player-row">
+              <div class="player-avatar">${p.name[0]}</div>
+              <div style="flex:1;min-width:0;">
+                <div style="font-weight:600;font-size:13px;">${p.name}</div>
+                <div class="flex items-center gap-1 mt-1">
+                  <span class="${posClass(p.position)}">${p.position}</span>
+                  ${t ? `<span style="font-size:11px;color:var(--text-2);">${t.abbr}</span>` : ''}
+                  ${t?.is_eliminated ? '<span style="font-size:10px;color:var(--red);">ELIMINATED</span>' : ''}
+                </div>
+              </div>
+              <div class="flex gap-2">
+                ${rounds.map(round => `
+                  <div style="text-align:center;">
+                    <div style="font-size:9px;color:var(--text-3);">${round.slice(0,3)}</div>
+                    <div style="font-size:12px;font-weight:600;font-family:var(--font-mono);">${r.scores[round] != null ? fmt(r.scores[round]) : '—'}</div>
+                  </div>
+                `).join('')}
+                <div style="text-align:center;min-width:40px;">
+                  <div style="font-size:9px;color:var(--text-3);">Total</div>
+                  <div style="font-size:13px;font-weight:700;color:var(--gold);font-family:var(--font-mono);">${fmt(r.total)}</div>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  function renderGames(games) {
+    const el = document.getElementById('tab-content');
+    const rounds = ['Wildcard', 'Divisional', 'Conference', 'Superbowl'];
+    const grouped = {};
+    for (const r of rounds) grouped[r] = games.filter(g => g.playoff_round === r);
+
+    el.innerHTML = rounds.filter(r => grouped[r].length).map(r => `
+      <div class="mb-3">
+        <h3 class="mb-2">${r}</h3>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${grouped[r].map(g => `
+            <div class="card" style="padding:0.75rem 1rem;">
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2">
+                  ${g.away_team ? `<span style="font-size:13px;font-weight:600;">${g.away_team.abbr}</span>` : '<span>TBD</span>'}
+                  <span style="color:var(--text-3);font-size:12px;">vs</span>
+                  ${g.home_team ? `<span style="font-size:13px;font-weight:600;">${g.home_team.abbr}</span>` : '<span>TBD</span>'}
+                </div>
+                ${g.status === 'FT'
+                  ? `<span style="font-size:13px;font-family:var(--font-mono);font-weight:600;">${g.away_score} - ${g.home_score}</span>`
+                  : `<span style="font-size:12px;color:var(--text-2);">${g.game_date || '—'} ${g.kickoff_time || ''}</span>`}
+                <span class="${g.status === 'FT' ? 'pill pill-complete' : g.status === 'NS' ? 'pill pill-setup' : 'pill pill-live'}">${g.status}</span>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function renderManageTab(league) {
+    const el = document.getElementById('tab-content');
+    el.innerHTML = `
+      <div class="admin-section">
+        <div class="admin-section-header">
+          <h3>Members</h3>
+          <div class="flex gap-2">
+            <input type="email" id="add-member-email" placeholder="user@email.com" style="width:220px;" />
+            <button class="btn btn-primary btn-sm" id="add-member-btn">Add Member</button>
+          </div>
+        </div>
+        <table class="admin-table">
+          <thead><tr><th>Name</th><th>Email</th><th>Draft Order</th><th></th></tr></thead>
+          <tbody>
+            ${(league.members || []).map(m => `
+              <tr>
+                <td>${m.display_name}</td>
+                <td style="color:var(--text-2);">${m.email || '—'}</td>
+                <td>${m.draft_order ?? '—'}</td>
+                <td><button class="btn btn-danger btn-sm" data-remove-member="${m.id}">Remove</button></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="admin-section">
+        <div class="admin-section-header"><h3>League Status</h3></div>
+        <div class="flex gap-2 flex-wrap">
+          ${['draft','drafting','active','complete'].map(s => `
+            <button class="btn ${league.status === s ? 'btn-primary' : 'btn-ghost'} btn-sm" data-set-status="${s}">${s}</button>
+          `).join('')}
+        </div>
+      </div>
+      <div class="admin-section">
+        <div class="admin-section-header">
+          <h3>Draft Order</h3>
+          <button class="btn btn-ghost btn-sm" id="randomize-order-btn">🎲 Randomize</button>
+        </div>
+        <p style="font-size:13px;color:var(--text-2);">Randomize sets a random snake draft order for all members.</p>
+      </div>
+    `;
+
+    document.getElementById('add-member-btn')?.addEventListener('click', async () => {
+      const email = document.getElementById('add-member-email').value.trim();
+      if (!email) return;
+      try {
+        await api('POST', `/leagues/${league.id}/members`, { email });
+        toast('Member added!', 'success');
+        loadLeagueTab(league.id, 'manage');
+      } catch (e) { toast(e.message, 'error'); }
+    });
+
+    el.querySelectorAll('[data-remove-member]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Remove this member?')) return;
+        try {
+          await api('DELETE', `/leagues/${league.id}/members/${btn.dataset.removeMember}`);
+          loadLeagueTab(league.id, 'manage');
+        } catch (e) { toast(e.message, 'error'); }
+      });
+    });
+
+    el.querySelectorAll('[data-set-status]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await api('PATCH', `/leagues/${league.id}`, { status: btn.dataset.setStatus });
+          toast('Status updated', 'success');
+          loadLeagueHeader(league.id);
+          loadLeagueTab(league.id, 'manage');
+        } catch (e) { toast(e.message, 'error'); }
+      });
+    });
+
+    document.getElementById('randomize-order-btn')?.addEventListener('click', async () => {
+      if (!confirm('Randomize draft order?')) return;
+      try {
+        await api('POST', `/leagues/${league.id}/set-draft-order`);
+        toast('Draft order randomized', 'success');
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  }
+
+  // ── DRAFT ROOM ──
+  async function renderDraftRoom({ id }) {
+    if (!getSession()) return navigate('/login');
+    await initDraft({ leagueId: id });
+  }
+
+  // ── ADMIN PANEL ──
+  async function renderAdmin() {
+    if (!getSession()) return navigate('/login');
+    if (!isAdmin()) return navigate('/');
+    destroyDraft();
+
+    document.getElementById('app').innerHTML = `
+      ${navbar()}
+      <div class="page" style="padding-top:1.5rem;">
+        <div class="flex items-center justify-between mb-3">
+          <h1>Admin Panel</h1>
+          <span class="pill pill-setup">Admin</span>
+        </div>
+        <div class="tabs mb-3">
+          <button class="tab active" data-atab="teams">Teams & Players</button>
+          <button class="tab" data-atab="games">Games</button>
+          <button class="tab" data-atab="scores">Scores</button>
+        </div>
+        <div id="admin-tab-content"></div>
+      </div>
+    `;
+
+    document.querySelectorAll('[data-atab]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('[data-atab]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        loadAdminTab(btn.dataset.atab);
+      });
+    });
+
+    loadAdminTab('teams');
+  }
+
+  async function loadAdminTab(tab) {
+    const el = document.getElementById('admin-tab-content');
+    el.innerHTML = `<div class="skeleton" style="height:200px;border-radius:var(--radius-lg);"></div>`;
+
+    if (tab === 'teams') {
+      el.innerHTML = `
+        <div class="admin-section">
+          <div class="admin-section-header">
+            <h3>Playoff Teams</h3>
+            <div class="flex gap-2">
+              <input type="number" id="admin-season" value="2026" style="width:80px;" />
+              <button class="btn btn-ghost btn-sm" id="pull-teams-btn">Pull from API</button>
+              <button class="btn btn-primary btn-sm" id="confirm-all-btn">Confirm All Players</button>
+            </div>
+          </div>
+          <div id="teams-list"><p style="color:var(--text-2);font-size:13px;">Enter a season and pull teams.</p></div>
+        </div>
+        <div class="admin-section">
+          <div class="admin-section-header">
+            <h3>Players</h3>
+            <button class="btn btn-ghost btn-sm" id="pull-players-btn">Pull Players from API</button>
+          </div>
+          <div id="players-list"></div>
+        </div>
+      `;
+
+      document.getElementById('pull-teams-btn')?.addEventListener('click', async () => {
+        const season = document.getElementById('admin-season').value;
+        try {
+          const r = await api('POST', '/players/pull-teams', { season: parseInt(season) });
+          toast(`Imported ${r.imported} teams`, 'success');
+          loadTeamsList(season);
+        } catch (e) { toast(e.message, 'error'); }
+      });
+
+      document.getElementById('pull-players-btn')?.addEventListener('click', async () => {
+        const season = document.getElementById('admin-season').value;
+        try {
+          toast('Pulling players… this may take a moment');
+          const r = await api('POST', '/players/pull-players', { season: parseInt(season) });
+          toast(`Imported ${r.imported} players`, 'success');
+        } catch (e) { toast(e.message, 'error'); }
+      });
+
+      document.getElementById('confirm-all-btn')?.addEventListener('click', async () => {
+        const season = document.getElementById('admin-season').value;
+        if (!confirm(`Confirm all players for ${season}?`)) return;
+        try {
+          await api('POST', '/players/confirm-all', { season: parseInt(season) });
+          toast('All players confirmed', 'success');
+        } catch (e) { toast(e.message, 'error'); }
+      });
+
+    } else if (tab === 'games') {
+      el.innerHTML = `
+        <div class="admin-section">
+          <div class="admin-section-header">
+            <h3>Postseason Games</h3>
+            <div class="flex gap-2 flex-wrap">
+              <input type="number" id="g-season" value="2026" style="width:80px;" />
+              <input type="text" id="g-start" placeholder="Start date YYYY-MM-DD" style="width:160px;" />
+              <input type="text" id="g-end" placeholder="End date YYYY-MM-DD" style="width:160px;" />
+              <button class="btn btn-ghost btn-sm" id="pull-games-btn">Pull Games</button>
+            </div>
+          </div>
+          <div id="games-admin-list"></div>
+        </div>
+      `;
+
+      document.getElementById('pull-games-btn')?.addEventListener('click', async () => {
+        const season   = document.getElementById('g-season').value;
+        const startDate = document.getElementById('g-start').value;
+        const endDate   = document.getElementById('g-end').value;
+        try {
+          const r = await api('POST', '/scores/pull-games', { season: parseInt(season), startDate, endDate });
+          toast(`Imported ${r.imported} games`, 'success');
+          loadAdminGames(season);
+        } catch (e) { toast(e.message, 'error'); }
+      });
+
+    } else if (tab === 'scores') {
+      el.innerHTML = `
+        <div class="admin-section">
+          <div class="admin-section-header"><h3>Manual Score Refresh</h3></div>
+          <p style="font-size:13px;color:var(--text-2);margin-bottom:1rem;">Scores update automatically every minute during game windows. Use this to force a refresh.</p>
+          <div id="refresh-games-list"></div>
+        </div>
+      `;
+      loadRefreshGames();
+    }
+  }
+
+  async function loadTeamsList(season) {
+    const el = document.getElementById('teams-list');
+    if (!el) return;
+    try {
+      const teams = await api('GET', `/players/teams?season=${season}`);
+      if (!teams.length) { el.innerHTML = '<p style="color:var(--text-2);font-size:13px;">No teams pulled yet.</p>'; return; }
+      el.innerHTML = `<table class="admin-table">
+        <thead><tr><th>Team</th><th>Abbr</th><th>In Playoffs</th><th>Eliminated</th></tr></thead>
+        <tbody>${teams.map(t => `
+          <tr>
+            <td>${t.name}</td>
+            <td>${t.abbr}</td>
+            <td><input type="checkbox" ${t.in_playoffs ? 'checked' : ''} data-team-id="${t.id}" data-field="in_playoffs" /></td>
+            <td><input type="checkbox" ${t.is_eliminated ? 'checked' : ''} data-team-id="${t.id}" data-field="is_eliminated" /></td>
+          </tr>
+        `).join('')}</tbody>
+      </table>`;
+
+      el.querySelectorAll('input[data-team-id]').forEach(cb => {
+        cb.addEventListener('change', async () => {
+          try {
+            await api('PATCH', `/players/teams/${cb.dataset.teamId}`, { [cb.dataset.field]: cb.checked });
+          } catch (e) { toast(e.message, 'error'); cb.checked = !cb.checked; }
+        });
+      });
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function loadAdminGames(season) {
+    const el = document.getElementById('games-admin-list');
+    if (!el) return;
+    try {
+      const games = await api('GET', `/scores/games?season=${season}`);
+      el.innerHTML = games.map(g => `
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;">
+          <span style="font-weight:600;min-width:120px;">${g.playoff_round}</span>
+          <span>${g.away_team?.abbr || '?'} vs ${g.home_team?.abbr || '?'}</span>
+          <span style="color:var(--text-2);">${g.game_date}</span>
+          <span>${g.status}</span>
+          <button class="btn btn-ghost btn-sm" data-refresh-game="${g.id}">Refresh</button>
+        </div>
+      `).join('');
+
+      el.querySelectorAll('[data-refresh-game]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          try {
+            await api('POST', `/scores/refresh-game/${btn.dataset.refreshGame}`);
+            toast('Stats refreshed', 'success');
+          } catch (e) { toast(e.message, 'error'); }
+        });
+      });
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function loadRefreshGames() {
+    const el = document.getElementById('refresh-games-list');
+    if (!el) return;
+    try {
+      const games = await api('GET', '/scores/games');
+      el.innerHTML = games.map(g => `
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;">
+          <span style="font-weight:600;min-width:120px;">${g.playoff_round}</span>
+          <span>${g.away_team?.abbr || '?'} vs ${g.home_team?.abbr || '?'}</span>
+          <span style="color:var(--text-2);flex:1;">${g.game_date} · ${g.status}</span>
+          <button class="btn btn-ghost btn-sm" data-refresh-game="${g.id}">↻ Refresh</button>
+        </div>
+      `).join('');
+
+      el.querySelectorAll('[data-refresh-game]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          try {
+            await api('POST', `/scores/refresh-game/${btn.dataset.refreshGame}`);
+            toast('Stats refreshed', 'success');
+          } catch (e) { toast(e.message, 'error'); }
+          btn.disabled = false;
+        });
+      });
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  // ── Navbar ──
+  function navbar() {
+    return `
+      <nav class="navbar">
+        <a class="navbar-brand" href="/" data-link>
+          <div class="navbar-logo">🏈</div>
+          <span class="navbar-title">Playoff <span>Fantasy</span></span>
+        </a>
+        <div class="navbar-right">
+          <a href="/admin" data-link class="nav-link" id="nav-admin-link" style="display:none;">Admin</a>
+          <span class="nav-link" id="nav-user"></span>
+          <button class="btn btn-ghost btn-sm" onclick="app.signOut()">Sign out</button>
+        </div>
+      </nav>
+    `;
+  }
+
+  // ── Shared: posClass ──
+  function posClass(pos) { return `pos pos-${pos}`; }
+
+  // ── Boot ──
+  init();
+</script>
+</body>
+</html>
