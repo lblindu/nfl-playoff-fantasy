@@ -175,7 +175,7 @@ function renderTeamsLeft() {
   const el = document.getElementById('teams-left');
   if (!el) return;
   const { member } = getPickingState();
-  if (!member) { el.innerHTML = ''; return; }
+  if (!member || draftState.isDone) { el.innerHTML = ''; return; }
 
   const teams = [...new Map(playerList.map(p => [p.nfl_teams?.id, p.nfl_teams])).values()].filter(Boolean);
   teams.sort((a, b) => a.abbr.localeCompare(b.abbr));
@@ -264,7 +264,25 @@ function renderPlayerList() {
   const el = document.getElementById('player-list');
   if (!el) return;
 
-  const { canPick, member } = getPickingState();
+  const { canPick, member, myMember } = getPickingState();
+
+  if (draftState.isDone) {
+    const mine = draftState.picks.filter(p => p.member_id === myMember?.id);
+    const pts = mine.reduce((sum, p) => sum + Number(playerList.find(x => x.id === p.players?.id)?.reg_season_points || 0), 0);
+    el.innerHTML = `
+      <div class="empty-state" style="padding:3rem 1rem;">
+        <div class="icon">🏆</div>
+        <h2 style="margin:8px 0 4px;">${myMember ? 'Your roster is locked in!' : 'The draft is complete!'}</h2>
+        <p style="max-width:420px;margin:0 auto;">
+          ${myMember
+            ? `You drafted ${mine.length} players, one from every playoff team${pts ? `, worth ${fmt(pts)} regular-season points` : ''}. Scoring starts with the first playoff game.`
+            : 'Every roster is set. Scoring starts with the first playoff game.'}
+        </p>
+        <a href="/league/${leagueId}" data-link class="btn btn-primary" style="margin-top:1.25rem;">View league standings →</a>
+      </div>`;
+    return;
+  }
+
   const takenTeams = teamIdsOf(member);
 
   // QBs already on the roster the pick is for
