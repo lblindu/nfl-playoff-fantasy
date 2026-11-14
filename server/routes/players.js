@@ -11,7 +11,7 @@ router.get('/', async (req, res) => {
   let query = supabase
     .from('players')
     .select(`
-      id, name, position, jersey_number, headshot_url, api_player_id,
+      *,
       nfl_teams!inner(id, name, abbr, primary_color, secondary_color, logo_url, is_eliminated)
     `)
     .eq('season', season)
@@ -20,8 +20,12 @@ router.get('/', async (req, res) => {
   if (teamId) query = query.eq('nfl_team_id', teamId);
   if (position) query = query.eq('position', position);
 
-  const { data: players, error } = await query.order('position').order('name');
+  const { data: players, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
+
+  // Best-ranked first; unranked players last
+  players.sort((a, b) =>
+    (a.overall_rank ?? 1e9) - (b.overall_rank ?? 1e9) || a.name.localeCompare(b.name));
 
   // If leagueId provided, mark which are drafted
   let draftedIds = new Set();

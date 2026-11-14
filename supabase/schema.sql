@@ -211,3 +211,12 @@ create or replace trigger on_auth_user_created
 
 -- Live draft: broadcast new picks over Supabase Realtime
 alter publication supabase_realtime add table public.draft_picks;
+
+-- Player rankings (filled by scripts/seed-rankings.mjs)
+alter table public.players
+  add column if not exists reg_season_points numeric,
+  add column if not exists overall_rank int,
+  add column if not exists pos_rank int;
+
+-- Let Realtime deliver DELETE events (draft undo / reset) with their league_id
+alter table public.draft_picks replica identity full;

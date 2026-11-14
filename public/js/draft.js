@@ -41,7 +41,7 @@ function subscribeRealtime() {
   channel = getSupabase()
     .channel(`draft:${leagueId}`)
     .on('postgres_changes', {
-      event: 'INSERT',
+      event: '*',
       schema: 'public',
       table: 'draft_picks',
       filter: `league_id=eq.${leagueId}`,
@@ -67,6 +67,36 @@ async function makePick(playerId) {
 
   try {
     await api('POST', `/draft/${leagueId}/pick`, { playerId, memberId });
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+// ── Who can pick right now, and for whom ──
+function getPickingState() {
+  const me = getMe();
+  const myMember = draftState.members.find(m => m.user_id === me?.id);
+  const onClock = draftState.onTheClock;
+  const canPick = !draftState.isDone && !!onClock && ((myMember && onClock.id === myMember.id) || isAdmin());
+  // Roster rules (one per team, QB cap) apply to whoever the pick is for
+  return { myMember, canPick, member: canPick ? onClock : myMember };
+}
+
+function teamIdsOf(member) {
+  return new Set(
+    draftState.picks
+      .filter(p => p.member_id === member?.id)
+      .map(p => p.players?.nfl_teams?.id)
+      .filter(Boolean)
+  );
+}
+
+async function resetDraft() {
+  if (!confirm('Delete ALL picks in this league and start the draft over?')) return;
+  try {
+    await api('DELETE', `/draft/${leagueId}/reset`);
+    toast('Draft reset');
+    await loadDraft();
   } catch (e) {
     toast(e.message, 'error');
   }
@@ -110,8 +140,9 @@ function renderShell() {
             <select id="team-filter" style="height:32px;width:auto;">
               <option value="">All teams</option>
             </select>
-            ${isAdmin() ? `<button class="btn btn-danger btn-sm" id="undo-btn">↩ Undo pick</button>` : ''}
+            ${isAdmin() ? `<button class="btn btn-danger btn-sm" id="undo-btn">↩ Undo pick</button><button class="btn btn-danger btn-sm" id="reset-btn">Reset draft</button>` : ''}
           </div>
+          <div id="teams-left" style="margin-top:10px;"></div>
         </div>
         <!-- Player list -->
         <div id="player-list" style="overflow-y:auto;flex:1;padding:0.75rem;"></div>
@@ -132,7 +163,34 @@ function renderAll() {
   renderDraftBoard();
   renderPosFilters();
   renderTeamFilter();
+  renderTeamsLeft();
   updateStatusPill();
+}
+
+function renderTeamsLeft() {
+  const el = document.getElementById('teams-left');
+  if (!el) return;
+  const { member } = getPickingState();
+  if (!member) { el.innerHTML = ''; return; }
+
+  const teams = [...new Map(playerList.map(p => [p.nfl_teams?.id, p.nfl_teams])).values()].filter(Boolean);
+  teams.sort((a, b) => a.abbr.localeCompare(b.abbr));
+  const taken = teamIdsOf(member);
+  const left = teams.filter(t => !taken.has(t.id));
+
+  el.innerHTML = `
+    <div style="font-size:11px;color:var(--text-3);margin-bottom:4px;">
+      Teams left for <b style="color:var(--text-2)">${member.display_name}</b>: ${left.length} of ${teams.length}
+      ${filterTeam ? ' · <a href="#" data-clear-team style="color:var(--gold);">show all</a>' : ''}
+    </div>
+    <div class="flex gap-1" style="flex-wrap:wrap;">
+      ${teams.map(t => {
+        const done = taken.has(t.id);
+        const active = filterTeam === t.id;
+        return `<button class="btn btn-sm ${active ? 'btn-primary' : 'btn-ghost'}" data-team-chip="${t.id}" ${done ? 'disabled' : ''}
+          style="height:24px;padding:0 8px;font-size:11px;${done ? 'opacity:.35;text-decoration:line-through;' : ''}">${t.abbr}</button>`;
+      }).join('')}
+    </div>`;
 }
 
 function renderClock() {
@@ -152,12 +210,29 @@ function renderClock() {
   const name = onTheClock?.display_name || '?';
   const round = Math.ceil(pickNum / draftState.members.length);
 
+  // How many picks until my next turn (snake order)
+  let upIn = '';
+  if (myMember && !isMyTurn) {
+    const n = draftState.members.length;
+    const order = [...draftState.members].sort((a, b) => a.draft_order - b.draft_order);
+    for (let k = picks.length; k < totalPicks; k++) {
+      const idx = Math.floor(k / n) % 2 === 0 ? k % n : n - 1 - (k % n);
+      if (order[idx]?.id === myMember.id) {
+        const d = k - picks.length;
+        upIn = `You're up in ${d} pick${d === 1 ? '' : 's'}`;
+        break;
+      }
+    }
+  }
+
   el.innerHTML = `
     <div class="flex items-center gap-2" style="flex-wrap:wrap;">
       <span class="pill pill-live"><span class="pill-dot pulse"></span>Pick ${pickNum} · Round ${round}</span>
       <span style="font-size:14px;font-weight:600;color:${isMyTurn ? 'var(--gold)' : 'var(--text)'}">
         ${isMyTurn ? '⭐ Your pick!' : `On the clock: ${name}`}
       </span>
+      ${upIn ? `<span style="font-size:12px;color:var(--text-2);">${upIn}</span>` : ''}
+      ${!isMyTurn && isAdmin() ? `<span style="font-size:12px;color:var(--gold);">Admin: you're drafting for ${name}</span>` : ''}
       <span style="font-size:12px;color:var(--text-3)">${picks.length}/${totalPicks}</span>
     </div>
   `;
@@ -186,19 +261,15 @@ function renderPlayerList() {
   const el = document.getElementById('player-list');
   if (!el) return;
 
-  const me = getMe();
-  const myMember = draftState.members.find(m => m.user_id === me?.id);
-  const isMyTurn = draftState.onTheClock && myMember && draftState.onTheClock.id === myMember.id;
-  const canPick = (isMyTurn || isAdmin()) && !draftState.isDone;
+  const { canPick, member } = getPickingState();
+  const takenTeams = teamIdsOf(member);
 
-  // Count QBs already on my roster
-  let myQbCount = 0;
-  if (myMember) {
-    const myPicks = draftState.picks.filter(p => p.member_id === myMember.id);
-    myQbCount = myPicks.filter(p => p.players?.position === 'QB').length;
-  }
+  // QBs already on the roster the pick is for
+  const myQbCount = draftState.picks
+    .filter(p => p.member_id === member?.id && p.players?.position === 'QB').length;
 
-  let filtered = playerList.filter(p => !p.drafted);
+  // Drafted players are gone for everyone; teams already on this roster are hidden
+  let filtered = playerList.filter(p => !p.drafted && !takenTeams.has(p.nfl_teams?.id));
   if (filterPos !== 'ALL') filtered = filtered.filter(p => p.position === filterPos);
   if (filterTeam) filtered = filtered.filter(p => p.nfl_teams?.id === filterTeam);
   if (filterSearch) {
@@ -226,11 +297,13 @@ function renderPlayerList() {
             <span class="${posClass(p.position)}">${p.position}</span>
             ${team ? `<span style="font-size:11px;color:var(--text-3);">${team.abbr}</span>` : ''}
             ${team?.is_eliminated ? '<span style="font-size:10px;color:var(--red);">ELIM</span>' : ''}
+            ${p.overall_rank ? `<span style="font-size:11px;color:var(--text-3);">#${p.overall_rank} overall · ${p.position}${p.pos_rank}</span>` : ''}
           </div>
         </div>
-        ${canPick ? `<button class="btn btn-sm btn-primary" ${disabled ? 'disabled' : ''} data-pick="${p.id}" title="${isQbLimit ? 'QB limit reached (2 max)' : ''}">
-          ${isQbLimit ? 'QB max' : 'Draft'}
-        </button>` : ''}
+        ${p.reg_season_points != null ? `<div style="text-align:right;min-width:44px;"><div style="font-size:13px;font-weight:600;color:var(--text);">${fmt(p.reg_season_points)}</div><div style="font-size:9px;color:var(--text-3);">REG PTS</div></div>` : ''}
+        <button class="btn btn-sm ${canPick ? 'btn-primary' : 'btn-ghost'}" ${disabled ? 'disabled' : ''} data-pick="${p.id}" title="${!canPick ? 'Wait for your turn' : isQbLimit ? 'QB limit reached (2 max)' : ''}">
+          ${!canPick ? 'Wait' : isQbLimit ? 'QB max' : 'Draft'}
+        </button>
       </div>
     `;
   }).join('');
@@ -290,7 +363,10 @@ function posClass(pos) {
 }
 
 // ── Event wiring ──
+let eventsBound = false;
 function bindEvents() {
+  if (eventsBound) return;
+  eventsBound = true;
   const app = document.getElementById('app');
 
   app.addEventListener('click', e => {
@@ -298,6 +374,23 @@ function bindEvents() {
     const pickBtn = e.target.closest('[data-pick]');
     if (pickBtn && !pickBtn.disabled) {
       makePick(pickBtn.dataset.pick);
+      return;
+    }
+    // Team chip filter
+    const chip = e.target.closest('[data-team-chip]');
+    if (chip && !chip.disabled) {
+      filterTeam = filterTeam === chip.dataset.teamChip ? '' : chip.dataset.teamChip;
+      renderPlayerList();
+      renderTeamFilter();
+      renderTeamsLeft();
+      return;
+    }
+    if (e.target.closest('[data-clear-team]')) {
+      e.preventDefault();
+      filterTeam = '';
+      renderPlayerList();
+      renderTeamFilter();
+      renderTeamsLeft();
       return;
     }
     // Pos filter
@@ -313,6 +406,10 @@ function bindEvents() {
       undoPick();
       return;
     }
+    if (e.target.id === 'reset-btn') {
+      resetDraft();
+      return;
+    }
   });
 
   app.addEventListener('input', e => {
@@ -323,6 +420,7 @@ function bindEvents() {
     if (e.target.id === 'team-filter') {
       filterTeam = e.target.value;
       renderPlayerList();
+      renderTeamsLeft();
     }
   });
 }
