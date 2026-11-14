@@ -28,7 +28,12 @@ const supabase = createClient(
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 
+let lastCall = 0;
 async function apiCall(path, params = {}) {
+  // Free plan: 10 requests/minute — keep calls ~7s apart
+  const wait = lastCall + 7000 - Date.now();
+  if (wait > 0) await sleep(wait);
+  lastCall = Date.now();
   const qs = Object.entries(params)
     .filter(([, v]) => v != null && v !== '')
     .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
@@ -52,20 +57,8 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // NFC: PHI, DET, LAR, TB, WSH, GB, MIN
 const PLAYOFF_TEAM_ABBRS = new Set([
   'KC', 'BUF', 'BAL', 'HOU', 'LAC', 'DEN', 'PIT',
-  'PHI', 'DET', 'LAR', 'TB', 'WSH', 'GB', 'MIN'
+  'PHI', 'DET', 'LA', 'TB', 'WAS', 'GB', 'MIN'   // api-sports codes: Rams = LA, Washington = WAS
 ]);
-
-// 2024 postseason game dates
-const POSTSEASON_DATES = [
-  // Wild Card weekend: Jan 11–12, 2025
-  '2025-01-11', '2025-01-12',
-  // Divisional: Jan 18–19, 2025
-  '2025-01-18', '2025-01-19',
-  // Conference: Jan 26, 2025
-  '2025-01-26',
-  // Super Bowl: Feb 9, 2025
-  '2025-02-09',
-];
 
 function normalizeRound(raw) {
   const r = String(raw || '').toLowerCase();
@@ -84,7 +77,6 @@ async function main() {
   // ── 1. Pull all teams for season 2024 ───────────────────────────────────
   console.log('1/5  Pulling teams from API…');
   const rawTeams = await apiCall('/teams', { league: NFL_LEAGUE_ID, season: SEASON });
-  await sleep(400);
 
   const teamRows = rawTeams.map(t => ({
     season: SEASON,
@@ -116,7 +108,12 @@ async function main() {
   const ALLOWED_POS = new Set(['QB', 'RB', 'WR', 'TE', 'FB']);
   let totalPlayers = 0;
 
+  const { data: existing } = await supabase.from('players').select('nfl_team_id').eq('season', SEASON);
+  const teamsWithPlayers = new Set((existing || []).map(p => p.nfl_team_id));
+  totalPlayers = (existing || []).length;
+
   for (const team of playoffTeams) {
+    if (teamsWithPlayers.has(team.id)) { console.log(`   • ${team.abbr} already seeded, skipping`); continue; }
     try {
       const rawPlayers = await apiCall('/players', { team: team.api_team_id, season: SEASON });
       const playerRows = rawPlayers
@@ -156,37 +153,38 @@ async function main() {
   console.log('\n3/5  Pulling postseason games…');
   const gameRows = [];
 
-  for (const dateStr of POSTSEASON_DATES) {
-    try {
-      const games = await apiCall('/games', { date: dateStr, league: NFL_LEAGUE_ID, season: SEASON });
-      for (const g of games) {
-        const gameObj = g.game || g;
-        const stage = String(gameObj.stage || g.stage || '').toLowerCase();
-        if (!stage.includes('post')) continue;
+  // Free plan blocks date filters but allows the whole season in one call
+  try {
+    const games = await apiCall('/games', { league: NFL_LEAGUE_ID, season: SEASON });
+    for (const g of games) {
+      const gameObj = g.game || g;
+      const stage = String(gameObj.stage || '').toLowerCase();
+      if (!stage.includes('post')) continue;
 
-        const round = normalizeRound(gameObj.round || gameObj.week || '');
-        if (!round) continue;
+      const round = normalizeRound(gameObj.week || '');   // skips Pro Bowl
+      if (!round) continue;
 
-        const homeApiId = String(g.teams?.home?.id || '');
-        const awayApiId = String(g.teams?.away?.id || '');
+      const homeApiId = String(g.teams?.home?.id || '');
+      const awayApiId = String(g.teams?.away?.id || '');
 
-        gameRows.push({
-          season: SEASON,
-          api_game_id: String(gameObj.id),
-          playoff_round: round,
-          game_date: dateStr,
-          kickoff_time: null,
-          status: 'FT',
-          home_team_id: teamByApiId.get(homeApiId)?.id || null,
-          away_team_id: teamByApiId.get(awayApiId)?.id || null,
-          home_score: g.scores?.home?.total ?? null,
-          away_score: g.scores?.away?.total ?? null,
-        });
-      }
-      await sleep(350);
-    } catch (e) {
-      console.warn(`   ⚠ ${dateStr}: ${e.message}`);
+      const hs = g.scores?.home?.total, as = g.scores?.away?.total;
+      gameRows.push({
+        winner_team_id: hs == null || as == null || hs === as ? null
+          : teamByApiId.get(hs > as ? homeApiId : awayApiId)?.id || null,
+        season: SEASON,
+        api_game_id: String(gameObj.id),
+        playoff_round: round,
+        game_date: gameObj.date?.date,
+        kickoff_time: gameObj.date?.timestamp ? new Date(gameObj.date.timestamp * 1000).toISOString() : null,
+        status: 'FT',
+        home_team_id: teamByApiId.get(homeApiId)?.id || null,
+        away_team_id: teamByApiId.get(awayApiId)?.id || null,
+        home_score: g.scores?.home?.total ?? null,
+        away_score: g.scores?.away?.total ?? null,
+      });
     }
+  } catch (e) {
+    console.warn(`   ⚠ games: ${e.message}`);
   }
 
   const { data: insertedGames, error: gameErr } = await supabase
@@ -232,6 +230,7 @@ async function main() {
         scoreRows.push({
           game_id: game.id,
           player_id: playerId,
+          api_player_id: apiId,
           points: pts,
           pass_yds: stats.passYds,
           pass_td: stats.passTD,
@@ -262,16 +261,15 @@ async function main() {
   // ── 5. Create a demo league + members ────────────────────────────────────
   console.log('\n5/5  Creating demo league…');
 
-  const { data: demoLeague, error: leagueErr } = await supabase
-    .from('leagues')
-    .upsert([{
-      name: 'Demo League 2024',
-      season: SEASON,
-      status: 'active',
-      max_members: 8,
-    }], { onConflict: 'name,season' })
-    .select()
-    .single();
+  let { data: demoLeague, error: leagueErr } = await supabase
+    .from('leagues').select().eq('name', 'Demo League 2024').eq('season', SEASON).maybeSingle();
+  if (!demoLeague && !leagueErr) {
+    ({ data: demoLeague, error: leagueErr } = await supabase
+      .from('leagues')
+      .insert([{ name: 'Demo League 2024', season: SEASON, status: 'setup' }])
+      .select()
+      .single());
+  }
 
   if (leagueErr) { console.warn('League upsert:', leagueErr.message); }
   else console.log(`   ✓ League: "${demoLeague.name}" (id: ${demoLeague.id})`);
