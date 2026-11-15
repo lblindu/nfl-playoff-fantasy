@@ -13,9 +13,14 @@
   --border:      rgba(255,255,255,0.08);
   --border-mid:  rgba(255,255,255,0.14);
 
+  /* "gold" is the theme accent; js/theme.js overrides these for team / NFL themes */
   --gold:        #f5a623;
+  --gold-rgb:    245,166,35;
   --gold-dim:    rgba(245,166,35,0.15);
   --gold-border: rgba(245,166,35,0.35);
+  --gold-hover:  #e09a1f;
+  --gold-deep:   #e08a0a;
+  --on-gold:     #000;
 
   --blue:        #3b82f6;
   --blue-dim:    rgba(59,130,246,0.15);
@@ -93,7 +98,7 @@ h3 { font-size: 16px; font-weight: 600; }
 .navbar-logo {
   width: 32px;
   height: 32px;
-  background: linear-gradient(135deg, var(--gold), #e08a0a);
+  background: linear-gradient(135deg, var(--gold), var(--gold-deep));
   border-radius: 8px;
   display: flex;
   align-items: center;
@@ -144,9 +149,9 @@ h3 { font-size: 16px; font-weight: 600; }
 
 .btn-primary {
   background: var(--gold);
-  color: #000;
+  color: var(--on-gold);
 }
-.btn-primary:hover { background: #e09a1f; }
+.btn-primary:hover { background: var(--gold-hover); }
 
 .btn-ghost {
   background: transparent;

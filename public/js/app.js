@@ -4,6 +4,7 @@
    ============================================================ */
 
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+import { applyTheme } from './theme.js';
 
 // ── Config — fetched from server at boot ──
 let _supabase = null;
@@ -127,9 +128,11 @@ export async function init() {
 
   const { data: { session } } = await supabase.auth.getSession();
   _session = session;
+  applyTheme(session?.user?.user_metadata?.theme);
 
   _supabase.auth.onAuthStateChange(async (event, s) => {
     _session = s;
+    applyTheme(s?.user?.user_metadata?.theme);
     if (s) {
       await loadMe();
       updateNavbar();

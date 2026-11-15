@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>NFL Playoff Fantasy</title>
   <link rel="stylesheet" href="/css/app.css" />
+  <script>
+    // Re-apply the cached theme before first paint (js/theme.js writes this)
+    try {
+      var tv = JSON.parse(localStorage.getItem('themeVars') || 'null');
+      if (tv) for (var k in tv) document.documentElement.style.setProperty(k, tv[k]);
+    } catch (e) {}
+  </script>
   <style>
     /* ── Login page ── */
     .login-wrap {
@@ -13,7 +20,7 @@
       align-items: center;
       justify-content: center;
       padding: 2rem 1rem;
-      background: radial-gradient(ellipse 80% 60% at 50% -20%, rgba(245,166,35,0.12) 0%, transparent 70%);
+      background: radial-gradient(ellipse 80% 60% at 50% -20%, rgba(var(--gold-rgb),0.12) 0%, transparent 70%);
     }
     .login-card {
       width: 100%;
@@ -23,7 +30,7 @@
     .login-logo {
       width: 72px;
       height: 72px;
-      background: linear-gradient(135deg, var(--gold), #e08a0a);
+      background: linear-gradient(135deg, var(--gold), var(--gold-deep));
       border-radius: 20px;
       display: flex;
       align-items: center;
@@ -57,11 +64,11 @@
 
     .login-btn {
       width: 100%; height: 44px; border-radius: var(--radius);
-      background: var(--gold); color: #000; border: none;
+      background: var(--gold); color: var(--on-gold); border: none;
       font-size: 15px; font-weight: 600; font-family: var(--font); cursor: pointer;
       transition: background .1s;
     }
-    .login-btn:hover { background: #e09a1f; }
+    .login-btn:hover { background: var(--gold-hover); }
     .login-btn:disabled { opacity: .5; cursor: not-allowed; }
 
     .auth-divider {
@@ -97,7 +104,7 @@
     /* ── Home / Lobby ── */
     .hero {
       padding: 3rem 0 2rem;
-      background: radial-gradient(ellipse 60% 40% at 50% 0%, rgba(245,166,35,0.08) 0%, transparent 60%);
+      background: radial-gradient(ellipse 60% 40% at 50% 0%, rgba(var(--gold-rgb),0.08) 0%, transparent 60%);
       border-bottom: 1px solid var(--border);
       margin-bottom: 2rem;
     }
@@ -158,9 +165,11 @@
 <script type="module">
   import { getSupabase, init, navigate, route, api, getMe, getSession, isAdmin, toast, signInWithGoogle, signOut, statusPill, posClass, fmt } from '/js/app.js';
   import { initDraft, destroyDraft } from '/js/draft.js';
+  import { openThemePicker, maybeAskTheme } from '/js/themepicker.js';
+  import { TEAMS } from '/js/theme.js';
 
   // Expose globally so inline onclick handlers can call them
-  window.app = { signOut, navigate };
+  window.app = { signOut, navigate, openTheme: () => openThemePicker() };
 
   // ── Routes ──
   route('/login', renderLogin);
@@ -203,6 +212,10 @@
             <input class="login-input" id="signup-name" type="text" placeholder="Display name" autocomplete="name" />
             <input class="login-input" id="signup-email" type="email" placeholder="Email address" autocomplete="email" />
             <input class="login-input" id="signup-password" type="password" placeholder="Password (min 6 chars)" autocomplete="new-password" />
+            <select class="login-input" id="signup-team">
+              <option value="nfl">No favorite team (NFL colors)</option>
+              ${[...TEAMS].sort((a, b) => a.name.localeCompare(b.name)).map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
+            </select>
             <button class="login-btn" id="signup-btn">Create account</button>
             <div class="auth-divider">or</div>
             <button class="google-btn" id="google-signup">${googleSvg} Continue with Google</button>
@@ -249,7 +262,7 @@
       if (password.length < 6) { errEl.textContent = 'Password must be at least 6 characters.'; errEl.classList.add('visible'); return; }
       const btn = document.getElementById('signup-btn');
       btn.disabled = true; btn.textContent = 'Creating account…';
-      const { error } = await getSupabase().auth.signUp({ email, password, options: { data: { display_name: name } } });
+      const { error } = await getSupabase().auth.signUp({ email, password, options: { data: { display_name: name, theme: document.getElementById('signup-team').value } } });
       btn.disabled = false; btn.textContent = 'Create account';
       if (error) { errEl.textContent = error.message; errEl.classList.add('visible'); return; }
       // On success Supabase fires onAuthStateChange → navigates to /
@@ -277,6 +290,7 @@
     // Signed in after following an invite link → go finish joining
     const pendingJoin = localStorage.getItem('pendingJoin');
     if (pendingJoin) return navigate(`/join/${pendingJoin}`);
+    maybeAskTheme();
 
     document.getElementById('app').innerHTML = `
       ${navbar()}
@@ -1125,6 +1139,7 @@
         <div class="navbar-right">
           <a href="/admin" data-link class="nav-link" id="nav-admin-link" style="display:${isAdmin() ? 'inline-flex' : 'none'};">Admin</a>
           <span class="nav-link" id="nav-user">${getMe()?.email?.split('@')[0] || ''}</span>
+          <button class="btn btn-ghost btn-sm" onclick="app.openTheme()" title="Theme">🎨</button>
           <button class="btn btn-ghost btn-sm" onclick="app.signOut()">Sign out</button>
         </div>
       </nav>

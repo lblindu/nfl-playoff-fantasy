@@ -133,6 +133,7 @@ function renderShell() {
       <div class="navbar-right">
         <span id="draft-status-pill"></span>
         <span class="nav-link" id="nav-user">${(getMe()?.email || getSession()?.user?.email || '').split('@')[0]}</span>
+        <button class="btn btn-ghost btn-sm" onclick="app.openTheme()" title="Theme">🎨</button>
         <button class="btn btn-ghost btn-sm" onclick="app.signOut()">Sign out</button>
       </div>
     </nav>
