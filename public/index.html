@@ -436,7 +436,7 @@
         const myMember = league.league_members?.find(m => m.user_id === me?.id);
         if (!myMember) { el.innerHTML = `<div class="empty-state"><div class="icon">👤</div><p>You are not a member of this league.</p></div>`; return; }
         const roster = await api('GET', `/scores/roster/${id}/${myMember.id}`);
-        renderRoster(roster);
+        renderRoster(roster, { league, memberId: myMember.id });
       } catch (e) { toast(e.message, 'error'); }
     } else if (tab === 'games') {
       try {
@@ -481,12 +481,13 @@
     `;
   }
 
-  function renderRoster(roster) {
+  function renderRoster(roster, ctx) {
     const el = document.getElementById('tab-content');
     const rounds = ['Wildcard', 'Divisional', 'Conference', 'Superbowl'];
     el.innerHTML = `
       <div class="card">
         <h3 class="mb-2">My Roster</h3>
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:10px;">Rosters are locked. If a player is ruled out before his team's next game, you can replace him with any undrafted player from the same team until kickoff.</p>
         ${roster.map(r => {
           const p = r.player;
           const t = r.team;
@@ -499,7 +500,11 @@
                   <span class="${posClass(p.position)}">${p.position}</span>
                   ${t ? `<span style="font-size:11px;color:var(--text-2);">${t.abbr}</span>` : ''}
                   ${t?.is_eliminated ? '<span style="font-size:10px;color:var(--red);">ELIMINATED</span>' : ''}
+                  ${r.injury === 'out' ? '<span style="font-size:10px;font-weight:700;color:var(--red);">OUT</span>' : ''}
                 </div>
+                ${(r.replaced || []).map(x => `<div style="font-size:11px;color:var(--text-3);margin-top:2px;">Replaced ${x.name} (${x.position}) · kept ${fmt(x.total)} pts</div>`).join('')}
+                ${r.swap?.canSwap ? `<div style="margin-top:6px;"><button class="btn btn-primary btn-sm" data-swap-out="${p.id}">Replace ${p.name.split(' ').pop()}</button>
+                  <span style="font-size:11px;color:var(--text-3);">${r.swap.nextGame ? `before ${t.abbr}'s ${r.swap.nextGame.playoff_round} game` : 'admin test mode'}</span></div>` : ''}
               </div>
               <div class="flex gap-2">
                 ${rounds.map(round => `
@@ -518,6 +523,68 @@
         }).join('')}
       </div>
     `;
+
+    el.querySelectorAll('[data-swap-out]').forEach(btn => {
+      btn.addEventListener('click', () => openSwapModal(ctx, roster.find(r => r.player.id === btn.dataset.swapOut)));
+    });
+  }
+
+  async function openSwapModal(ctx, row) {
+    let options;
+    try {
+      const pool = await api('GET', `/players?season=${ctx.league.season}&leagueId=${ctx.league.id}&teamId=${row.team.id}`);
+      options = pool.filter(p => !p.drafted && p.id !== row.player.id);
+    } catch (e) { return toast(e.message, 'error'); }
+
+    // Admins can test with a past game when the team has no upcoming one
+    const needsGame = isAdmin() && !row.swap.nextGame;
+    document.body.insertAdjacentHTML('beforeend', `
+      <div id="modal-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:200;display:flex;align-items:center;justify-content:center;padding:1rem;">
+        <div class="card" style="width:100%;max-width:460px;max-height:80vh;display:flex;flex-direction:column;">
+          <div class="flex items-center justify-between mb-2">
+            <h3>Replace ${row.player.name}</h3>
+            <button class="btn btn-ghost btn-sm" id="close-modal">✕</button>
+          </div>
+          <p style="font-size:12px;color:var(--text-2);margin-bottom:8px;">
+            Undrafted ${row.team.abbr} players. ${row.player.name} keeps the points he already scored; your replacement scores from ${row.swap.nextGame ? `the ${row.swap.nextGame.playoff_round} game` : 'the game you pick below'} on.
+          </p>
+          ${needsGame ? `<select id="swap-game" style="margin-bottom:8px;">${(row.swap.teamGames || []).map(g => `<option value="${g.id}">Effective from: ${g.playoff_round} · ${g.game_date} (${g.status})</option>`).join('')}</select>` : ''}
+          <div style="overflow-y:auto;flex:1;">
+            ${options.length ? options.map(p => `
+              <div class="draft-pick" style="margin-bottom:6px;">
+                <div style="flex:1;min-width:0;">
+                  <div style="font-size:13px;font-weight:600;">${p.name}</div>
+                  <div class="flex items-center gap-1" style="margin-top:2px;">
+                    <span class="${posClass(p.position)}">${p.position}</span>
+                    ${p.overall_rank ? `<span style="font-size:11px;color:var(--text-3);">#${p.overall_rank} overall</span>` : ''}
+                  </div>
+                </div>
+                ${p.reg_season_points != null ? `<div style="font-size:12px;color:var(--text-2);margin-right:8px;">${fmt(p.reg_season_points)} reg pts</div>` : ''}
+                <button class="btn btn-primary btn-sm" data-swap-in="${p.id}">Pick</button>
+              </div>`).join('') : '<p style="color:var(--text-2);font-size:13px;">No undrafted players left on this team.</p>'}
+          </div>
+        </div>
+      </div>`);
+
+    const overlay = document.getElementById('modal-overlay');
+    document.getElementById('close-modal').addEventListener('click', () => overlay.remove());
+    overlay.querySelectorAll('[data-swap-in]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const inP = options.find(p => p.id === btn.dataset.swapIn);
+        if (!confirm(`Replace ${row.player.name} with ${inP.name}? This can't be undone.`)) return;
+        try {
+          await api('POST', `/leagues/${ctx.league.id}/swap`, {
+            outPlayerId: row.player.id,
+            inPlayerId: inP.id,
+            memberId: ctx.memberId,
+            effectiveGameId: needsGame ? document.getElementById('swap-game').value : undefined,
+          });
+          overlay.remove();
+          toast(`${inP.name} added to your roster`, 'success');
+          loadLeagueTab(ctx.league.id, 'roster');
+        } catch (e) { toast(e.message, 'error'); }
+      });
+    });
   }
 
   function renderGames(games) {
@@ -661,6 +728,7 @@
         <div class="tabs mb-3">
           <button class="tab active" data-atab="teams">Teams & Players</button>
           <button class="tab" data-atab="games">Games</button>
+          <button class="tab" data-atab="injuries">Injuries</button>
           <button class="tab" data-atab="scores">Scores</button>
         </div>
         <div id="admin-tab-content"></div>
@@ -769,6 +837,62 @@
           loadAdminGames(season);
         } catch (e) { toast(e.message, 'error'); }
       });
+
+    } else if (tab === 'injuries') {
+      el.innerHTML = `
+        <div class="admin-section">
+          <div class="admin-section-header">
+            <h3>Injuries</h3>
+            <div class="flex gap-2">
+              <select id="inj-season" style="width:90px;">${seasonOptions()}</select>
+              <input type="text" id="inj-search" placeholder="Search players…" style="width:200px;" />
+            </div>
+          </div>
+          <p style="font-size:13px;color:var(--text-2);margin-bottom:1rem;">
+            Mark a player OUT when he is ruled out before his team's next game. His owner can then replace him until kickoff.
+            Don't use this for injuries during a game. Clear the flag after the game.
+          </p>
+          <div id="inj-list"></div>
+        </div>`;
+
+      let players = [];
+      const render = () => {
+        const q = document.getElementById('inj-search').value.trim().toLowerCase();
+        const out = players.filter(p => p.injury_status === 'out');
+        const matches = q ? players.filter(p => p.injury_status !== 'out' && p.name.toLowerCase().includes(q)).slice(0, 25) : [];
+        const row = p => `
+          <tr>
+            <td>${p.name}</td><td>${p.position}</td><td>${p.nfl_teams?.abbr || ''}</td>
+            <td><input type="checkbox" data-inj="${p.id}" ${p.injury_status === 'out' ? 'checked' : ''} /></td>
+          </tr>`;
+        document.getElementById('inj-list').innerHTML = `
+          <h4 style="margin-bottom:6px;">Currently OUT (${out.length})</h4>
+          ${out.length ? `<table class="admin-table"><thead><tr><th>Player</th><th>Pos</th><th>Team</th><th>Out</th></tr></thead><tbody>${out.map(row).join('')}</tbody></table>`
+            : '<p style="color:var(--text-2);font-size:13px;">Nobody is marked out.</p>'}
+          ${q ? `<h4 style="margin:1rem 0 6px;">Search results</h4>
+            ${matches.length ? `<table class="admin-table"><thead><tr><th>Player</th><th>Pos</th><th>Team</th><th>Out</th></tr></thead><tbody>${matches.map(row).join('')}</tbody></table>`
+              : '<p style="color:var(--text-2);font-size:13px;">No matching players.</p>'}` : ''}`;
+        document.querySelectorAll('[data-inj]').forEach(cb => {
+          cb.addEventListener('change', async () => {
+            try {
+              await api('POST', `/players/${cb.dataset.inj}/injury`, { status: cb.checked ? 'out' : null });
+              const p = players.find(x => x.id === cb.dataset.inj);
+              p.injury_status = cb.checked ? 'out' : null;
+              render();
+            } catch (e) { toast(e.message, 'error'); cb.checked = !cb.checked; }
+          });
+        });
+      };
+
+      const load = async () => {
+        try {
+          players = await api('GET', `/players?season=${document.getElementById('inj-season').value}`);
+          render();
+        } catch (e) { toast(e.message, 'error'); }
+      };
+      document.getElementById('inj-season').addEventListener('change', load);
+      document.getElementById('inj-search').addEventListener('input', render);
+      load();
 
     } else if (tab === 'scores') {
       el.innerHTML = `

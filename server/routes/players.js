@@ -34,7 +34,12 @@ router.get('/', async (req, res) => {
       .from('draft_picks')
       .select('player_id')
       .eq('league_id', leagueId);
-    draftedIds = new Set((picks || []).map(p => p.player_id));
+    // Players swapped in as injury replacements are taken too
+    const { data: swaps } = await supabase
+      .from('roster_swaps')
+      .select('in_player_id')
+      .eq('league_id', leagueId);
+    draftedIds = new Set([...(picks || []).map(p => p.player_id), ...(swaps || []).map(s => s.in_player_id)]);
   }
 
   const result = players.map(p => ({ ...p, drafted: draftedIds.has(p.id) }));
@@ -90,6 +95,19 @@ router.post('/pull-teams', requireAdmin, async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// POST /api/players/:id/injury — admin: mark a player OUT for his team's next game (or clear it)
+router.post('/:id/injury', requireAdmin, async (req, res) => {
+  const status = req.body.status === 'out' ? 'out' : null;
+  const { data, error } = await supabase
+    .from('players')
+    .update({ injury_status: status })
+    .eq('id', req.params.id)
+    .select('id, injury_status')
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
 
 // PATCH /api/players/teams/:id — admin: update team (confirm, set color, etc.)

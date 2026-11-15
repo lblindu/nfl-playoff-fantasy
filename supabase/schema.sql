@@ -220,3 +220,22 @@ alter table public.players
 
 -- Let Realtime deliver DELETE events (draft undo / reset) with their league_id
 alter table public.draft_picks replica identity full;
+
+-- Injury replacements
+-- Admin marks a player OUT before his team's next game; his owner may swap him for an
+-- undrafted player from the same NFL team until that game kicks off.
+alter table public.players add column if not exists injury_status text;  -- null | 'out'
+
+create table if not exists public.roster_swaps (
+  id uuid primary key default gen_random_uuid(),
+  league_id uuid not null references public.leagues(id) on delete cascade,
+  member_id uuid not null references public.league_members(id) on delete cascade,
+  out_player_id uuid not null references public.players(id),
+  in_player_id uuid not null references public.players(id),
+  effective_game_id uuid not null references public.games(id),  -- replacement scores from this game on
+  created_at timestamptz default now(),
+  unique (league_id, in_player_id)
+);
+
+alter table public.roster_swaps enable row level security;
+create policy "roster_swaps_read" on public.roster_swaps for select using (auth.role() = 'authenticated');

@@ -3,6 +3,7 @@ const router = express.Router();
 const supabase = require('../lib/supabase');
 const { getPostseasonGames } = require('../lib/apiSports');
 const { refreshGameStats } = require('../jobs/scoring');
+const { buildChain, activePlayerAt, gameTime, findNextGame } = require('../lib/rosters');
 
 // GET /api/scores/standings/:leagueId
 router.get('/standings/:leagueId', async (req, res) => {
@@ -31,41 +32,88 @@ router.get('/roster/:leagueId/:memberId', async (req, res) => {
 
   const { data: picks, error } = await supabase
     .from('draft_picks')
-    .select(`
-      id, pick_number,
-      players(
-        id, name, position, jersey_number, headshot_url,
-        nfl_teams(id, name, abbr, primary_color, secondary_color, logo_url, is_eliminated, eliminated_round),
-        game_player_scores(
-          points, pass_yds, pass_td, interceptions, rush_yds, rush_td,
-          receptions, rec_yds, rec_td, fumbles, two_pt, last_updated,
-          games(playoff_round, game_date, status)
-        )
-      )
-    `)
+    .select('pick_number, player_id')
     .eq('league_id', leagueId)
     .eq('member_id', memberId)
     .order('pick_number');
 
   if (error) return res.status(500).json({ error: error.message });
 
-  // Reshape: group scores by round
-  const result = (picks || []).map(pick => {
-    const p = pick.players;
-    const scoresByRound = {};
-    for (const s of (p?.game_player_scores || [])) {
-      const round = s.games?.playoff_round;
-      if (!round) continue;
-      scoresByRound[round] = (scoresByRound[round] || 0) + s.points;
+  const { data: swapRows } = await supabase
+    .from('roster_swaps')
+    .select('out_player_id, in_player_id, effective_game:games!effective_game_id(kickoff_time, game_date)')
+    .eq('league_id', leagueId)
+    .eq('member_id', memberId);
+  const swaps = swapRows || [];
+
+  const chains = (picks || []).map(pick => ({ pick, chain: buildChain(pick.player_id, swaps) }));
+  const ids = [...new Set(chains.flatMap(c => c.chain.map(e => e.playerId)))];
+  if (!ids.length) return res.json([]);
+
+  const [playersRes, scoresRes] = await Promise.all([
+    supabase.from('players')
+      .select('*, nfl_teams(id, name, abbr, primary_color, secondary_color, logo_url, is_eliminated, eliminated_round)')
+      .in('id', ids),
+    supabase.from('game_player_scores')
+      .select('player_id, points, games!inner(playoff_round, game_date, kickoff_time)')
+      .in('player_id', ids),
+  ]);
+  if (playersRes.error) return res.status(500).json({ error: playersRes.error.message });
+
+  const playerById = new Map(playersRes.data.map(p => [p.id, p]));
+  const scoresByPlayer = new Map();
+  for (const s of scoresRes.data || []) {
+    if (!scoresByPlayer.has(s.player_id)) scoresByPlayer.set(s.player_id, []);
+    scoresByPlayer.get(s.player_id).push(s);
+  }
+
+  const result = [];
+  for (const { pick, chain } of chains) {
+    // Points each player in the slot earned while he was the active one
+    const segments = chain.map(entry => {
+      const byRound = {};
+      for (const s of scoresByPlayer.get(entry.playerId) || []) {
+        if (activePlayerAt(chain, gameTime(s.games)) !== entry.playerId) continue;
+        const round = s.games.playoff_round;
+        byRound[round] = (byRound[round] || 0) + (s.points || 0);
+      }
+      const total = Object.values(byRound).reduce((a, b) => a + b, 0);
+      return { player: playerById.get(entry.playerId), byRound, total };
+    });
+
+    const current = segments[segments.length - 1];
+    const p = current.player;
+    const scores = {};
+    for (const seg of segments) {
+      for (const [round, pts] of Object.entries(seg.byRound)) scores[round] = (scores[round] || 0) + pts;
     }
-    return {
+
+    // Can this slot be swapped? Only an OUT player, and only before his team's next kickoff
+    const swap = { canSwap: false, nextGame: null, teamGames: null };
+    if (p.injury_status === 'out') {
+      swap.nextGame = await findNextGame(p.nfl_teams.id);
+      swap.canSwap = !!swap.nextGame || req.isAdmin === true;
+      if (req.isAdmin) {
+        const { data: tg } = await supabase
+          .from('games')
+          .select('id, playoff_round, game_date, kickoff_time, status')
+          .or(`home_team_id.eq.${p.nfl_teams.id},away_team_id.eq.${p.nfl_teams.id}`)
+          .order('game_date');
+        swap.teamGames = tg || [];
+      }
+    }
+
+    result.push({
       pick_number: pick.pick_number,
       player: { id: p.id, name: p.name, position: p.position, jersey_number: p.jersey_number, headshot_url: p.headshot_url },
       team: p.nfl_teams,
-      scores: scoresByRound,
-      total: Object.values(scoresByRound).reduce((a, b) => a + b, 0),
-    };
-  });
+      injury: p.injury_status || null,
+      scores,
+      total: Object.values(scores).reduce((a, b) => a + b, 0),
+      replaced: segments.slice(0, -1).map(s => ({ name: s.player?.name, position: s.player?.position, total: s.total })),
+      swap,
+    });
+  }
 
   res.json(result);
 });

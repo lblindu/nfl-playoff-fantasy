@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../lib/supabase');
+const { findNextGame } = require('../lib/rosters');
+const { recalcMemberScores } = require('../jobs/scoring');
 
 // 14 playoff teams → 7 players per league, always
 const LEAGUE_SIZE = 7;
@@ -115,6 +117,79 @@ router.post('/:id/members', requireAdmin, async (req, res) => {
 
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
+});
+
+// POST /api/leagues/:id/swap — replace an OUT player with an undrafted player from the same NFL team
+router.post('/:id/swap', async (req, res) => {
+  if (!req.userId) return res.status(401).json({ error: 'Not authenticated' });
+  const leagueId = req.params.id;
+  const { outPlayerId, inPlayerId, memberId, effectiveGameId } = req.body;
+  if (!outPlayerId || !inPlayerId) return res.status(400).json({ error: 'outPlayerId and inPlayerId required' });
+
+  const { data: members } = await supabase.from('league_members').select('id, user_id').eq('league_id', leagueId);
+  const member = req.isAdmin && memberId
+    ? members?.find(m => m.id === memberId)
+    : members?.find(m => m.user_id === req.userId);
+  if (!member) return res.status(403).json({ error: 'You are not a member of this league' });
+
+  // The player being replaced must be active on this member's roster right now
+  const [{ data: picks }, { data: swapRows }] = await Promise.all([
+    supabase.from('draft_picks').select('player_id').eq('league_id', leagueId).eq('member_id', member.id),
+    supabase.from('roster_swaps').select('out_player_id, in_player_id').eq('league_id', leagueId).eq('member_id', member.id),
+  ]);
+  const swaps = swapRows || [];
+  const activeIds = (picks || []).map(p => {
+    let cur = p.player_id;
+    for (let s = swaps.find(x => x.out_player_id === cur); s; s = swaps.find(x => x.out_player_id === cur)) cur = s.in_player_id;
+    return cur;
+  });
+  if (!activeIds.includes(outPlayerId)) return res.status(400).json({ error: 'That player is not on your active roster' });
+
+  const { data: pair } = await supabase.from('players').select('*').in('id', [outPlayerId, inPlayerId]);
+  const outP = pair?.find(p => p.id === outPlayerId);
+  const inP = pair?.find(p => p.id === inPlayerId);
+  if (!outP || !inP) return res.status(404).json({ error: 'Player not found' });
+
+  if (outP.injury_status !== 'out') return res.status(400).json({ error: 'Only players marked OUT can be replaced' });
+  if (inP.nfl_team_id !== outP.nfl_team_id) return res.status(400).json({ error: 'The replacement must be from the same NFL team' });
+  if (inP.season !== outP.season || !inP.confirmed) return res.status(400).json({ error: 'That player is not in the draft pool' });
+
+  // Replacement must be undrafted in this league (drafted, or already swapped in by anyone)
+  const [{ data: drafted }, { data: swappedIn }] = await Promise.all([
+    supabase.from('draft_picks').select('id').eq('league_id', leagueId).eq('player_id', inPlayerId),
+    supabase.from('roster_swaps').select('id').eq('league_id', leagueId).eq('in_player_id', inPlayerId),
+  ]);
+  if (drafted?.length || swappedIn?.length) return res.status(409).json({ error: 'That player is already on a roster in this league' });
+
+  // Position is free, but the roster still can't exceed 2 QBs
+  if (inP.position === 'QB') {
+    const { data: roster } = await supabase.from('players').select('id, position').in('id', activeIds);
+    const qbs = (roster || []).filter(p => p.position === 'QB' && p.id !== outPlayerId).length;
+    if (qbs >= 2) return res.status(400).json({ error: 'Maximum 2 QBs per roster' });
+  }
+
+  // The swap takes effect for the team's next game, and must be made before it kicks off
+  let game;
+  if (req.isAdmin && effectiveGameId) {
+    const { data } = await supabase.from('games').select('id, home_team_id, away_team_id').eq('id', effectiveGameId).single();
+    if (!data || ![data.home_team_id, data.away_team_id].includes(outP.nfl_team_id)) {
+      return res.status(400).json({ error: 'That game does not involve this team' });
+    }
+    game = data;
+  } else {
+    game = await findNextGame(outP.nfl_team_id);
+    if (!game) return res.status(400).json({ error: 'No upcoming game for this team — swaps close at kickoff' });
+  }
+
+  const { data: swap, error } = await supabase
+    .from('roster_swaps')
+    .insert({ league_id: leagueId, member_id: member.id, out_player_id: outPlayerId, in_player_id: inPlayerId, effective_game_id: game.id })
+    .select()
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+
+  await recalcMemberScores();
+  res.json(swap);
 });
 
 // DELETE /api/leagues/:id/members/:memberId (admin only)

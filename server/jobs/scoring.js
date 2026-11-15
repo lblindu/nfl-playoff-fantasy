@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const supabase = require('../lib/supabase');
 const { getGamePlayerStats, parseGroupedStats, computePoints } = require('../lib/apiSports');
+const { buildChain, activePlayerAt, gameTime } = require('../lib/rosters');
 
 const ROUNDS = ['Wildcard', 'Divisional', 'Conference', 'Superbowl'];
 
@@ -96,28 +97,52 @@ async function refreshGameStats(game) {
 
 // Recompute member_round_scores for a given round across all leagues
 async function recalcMemberScores(playoffRound) {
-  // Get all draft picks with their player's current round score
   const { data: picks } = await supabase
     .from('draft_picks')
-    .select(`
-      member_id,
-      league_id,
-      player_id,
-      players!inner(id,
-        game_player_scores(points, games!inner(playoff_round))
-      )
-    `);
+    .select('member_id, league_id, player_id');
 
   if (!picks?.length) return;
 
+  // Injury replacements: the old player scores up to the swap, the replacement from then on
+  const { data: swapRows } = await supabase
+    .from('roster_swaps')
+    .select('league_id, member_id, out_player_id, in_player_id, effective_game:games!effective_game_id(kickoff_time, game_date)');
+  const swapsBySlot = new Map();
+  for (const s of swapRows || []) {
+    const key = `${s.league_id}|${s.member_id}`;
+    if (!swapsBySlot.has(key)) swapsBySlot.set(key, []);
+    swapsBySlot.get(key).push(s);
+  }
+
+  const chains = picks.map(p => ({
+    ...p,
+    chain: buildChain(p.player_id, swapsBySlot.get(`${p.league_id}|${p.member_id}`) || []),
+  }));
+
+  const playerIds = [...new Set(chains.flatMap(c => c.chain.map(e => e.playerId)))];
+  const scoresByPlayer = new Map();
+  for (let i = 0; i < playerIds.length; i += 100) {
+    const { data } = await supabase
+      .from('game_player_scores')
+      .select('player_id, points, games!inner(playoff_round, game_date, kickoff_time)')
+      .in('player_id', playerIds.slice(i, i + 100));
+    for (const s of data || []) {
+      if (!scoresByPlayer.has(s.player_id)) scoresByPlayer.set(s.player_id, []);
+      scoresByPlayer.get(s.player_id).push(s);
+    }
+  }
+
   // Aggregate: member_id + league_id + round → sum of points
   const agg = new Map();
-  for (const pick of picks) {
-    for (const score of (pick.players?.game_player_scores || [])) {
-      const round = score.games?.playoff_round;
-      if (!round) continue;
-      const key = `${pick.league_id}|${pick.member_id}|${round}`;
-      agg.set(key, (agg.get(key) || 0) + (score.points || 0));
+  for (const { league_id, member_id, chain } of chains) {
+    for (const entry of chain) {
+      for (const score of scoresByPlayer.get(entry.playerId) || []) {
+        const round = score.games?.playoff_round;
+        if (!round) continue;
+        if (activePlayerAt(chain, gameTime(score.games)) !== entry.playerId) continue;
+        const key = `${league_id}|${member_id}|${round}`;
+        agg.set(key, (agg.get(key) || 0) + (score.points || 0));
+      }
     }
   }
 
