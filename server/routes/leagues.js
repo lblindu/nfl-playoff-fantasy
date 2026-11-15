@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../lib/supabase');
 
+// 14 playoff teams → 7 players per league, always
+const LEAGUE_SIZE = 7;
+
 // GET /api/leagues — list all leagues (authenticated user sees theirs + public ones)
 router.get('/', async (req, res) => {
   const { data, error } = await supabase
@@ -62,6 +65,15 @@ router.patch('/:id', requireAdmin, async (req, res) => {
   const updates = {};
   for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
 
+  // A real league needs exactly 7 members to draft; admins can force it for testing
+  if (updates.status === 'drafting' && !req.body.force) {
+    const { count } = await supabase
+      .from('league_members').select('*', { count: 'exact', head: true }).eq('league_id', req.params.id);
+    if (count !== LEAGUE_SIZE) {
+      return res.status(400).json({ error: `A league needs exactly ${LEAGUE_SIZE} members to start the draft (has ${count}).` });
+    }
+  }
+
   const { data, error } = await supabase
     .from('leagues')
     .update(updates)
@@ -77,6 +89,10 @@ router.patch('/:id', requireAdmin, async (req, res) => {
 router.post('/:id/members', requireAdmin, async (req, res) => {
   const { email, display_name } = req.body;
   if (!email) return res.status(400).json({ error: 'email required' });
+
+  const { count } = await supabase
+    .from('league_members').select('*', { count: 'exact', head: true }).eq('league_id', req.params.id);
+  if (count >= LEAGUE_SIZE) return res.status(400).json({ error: `League is full (${LEAGUE_SIZE} members max).` });
 
   // Find user by email
   const { data: user } = await supabase

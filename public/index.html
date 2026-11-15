@@ -338,16 +338,11 @@
             <label>League Name</label>
             <input type="text" id="new-league-name" placeholder="e.g. Friday Night League" />
           </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label>Season</label>
-              <input type="number" id="new-league-season" value="2026" />
-            </div>
-            <div class="form-group">
-              <label>Max Members</label>
-              <input type="number" id="new-league-max" value="10" />
-            </div>
+          <div class="form-group">
+            <label>Season</label>
+            <input type="number" id="new-league-season" value="2026" />
           </div>
+          <p style="font-size:12px;color:var(--text-3);">Every league has exactly 7 players.</p>
           <button class="btn btn-primary btn-full mt-2" id="submit-league">Create League</button>
         </div>
       </div>
@@ -357,10 +352,9 @@
     document.getElementById('submit-league').addEventListener('click', async () => {
       const name   = document.getElementById('new-league-name').value.trim();
       const season = parseInt(document.getElementById('new-league-season').value);
-      const max    = parseInt(document.getElementById('new-league-max').value);
       if (!name) return toast('Name required', 'error');
       try {
-        await api('POST', '/leagues', { name, season, max_members: max });
+        await api('POST', '/leagues', { name, season });
         document.getElementById('modal-overlay')?.remove();
         toast('League created!', 'success');
         renderHome();
@@ -561,7 +555,7 @@
     el.innerHTML = `
       <div class="admin-section">
         <div class="admin-section-header">
-          <h3>Members</h3>
+          <h3>Members <span style="font-size:13px;font-weight:500;color:${(league.league_members || []).length === 7 ? 'var(--gold)' : 'var(--text-3)'};">${(league.league_members || []).length} of 7</span></h3>
           <div class="flex gap-2">
             <input type="email" id="add-member-email" placeholder="user@email.com" style="width:220px;" />
             <button class="btn btn-primary btn-sm" id="add-member-btn">Add Member</button>
@@ -620,8 +614,15 @@
 
     el.querySelectorAll('[data-set-status]').forEach(btn => {
       btn.addEventListener('click', async () => {
+        const status = btn.dataset.setStatus;
+        const count = (league.league_members || []).length;
+        let force = false;
+        if (status === 'drafting' && count !== 7) {
+          if (!confirm(`Only ${count} of 7 members have joined. Start the draft anyway? (Use this for testing only.)`)) return;
+          force = true;
+        }
         try {
-          await api('PATCH', `/leagues/${league.id}`, { status: btn.dataset.setStatus });
+          await api('PATCH', `/leagues/${league.id}`, { status, force });
           toast('Status updated', 'success');
           loadLeagueHeader(league.id);
           loadLeagueTab(league.id, 'manage');
