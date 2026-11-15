@@ -137,7 +137,8 @@ export async function init() {
     } else {
       _me = null; // signed out
       updateNavbar();
-      if (location.pathname !== '/login') navigate('/login');
+      // Invite links are viewable signed-out; they ask you to sign in when you press Join
+      if (location.pathname !== '/login' && !location.pathname.startsWith('/join/')) navigate('/login');
     }
   });
 

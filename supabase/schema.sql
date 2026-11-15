@@ -239,3 +239,7 @@ create table if not exists public.roster_swaps (
 
 alter table public.roster_swaps enable row level security;
 create policy "roster_swaps_read" on public.roster_swaps for select using (auth.role() = 'authenticated');
+
+-- League invites: commissioners share /join/<invite_code>
+alter table public.leagues add column if not exists invite_code text unique;
+update public.leagues set invite_code = substr(md5(random()::text || id::text), 1, 10) where invite_code is null;

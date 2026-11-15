@@ -1,28 +1,121 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../lib/supabase');
+const crypto = require('crypto');
 const { findNextGame } = require('../lib/rosters');
+const { leagueAccess } = require('../lib/access');
 const { recalcMemberScores } = require('../jobs/scoring');
 
 // 14 playoff teams → 7 players per league, always
 const LEAGUE_SIZE = 7;
+// Season new leagues are created for (admins may pick another, e.g. 2024 test data)
+const CURRENT_SEASON = parseInt(process.env.CURRENT_SEASON || '2026');
 
-// GET /api/leagues — list all leagues (authenticated user sees theirs + public ones)
+async function memberCount(leagueId) {
+  const { count } = await supabase
+    .from('league_members').select('*', { count: 'exact', head: true }).eq('league_id', leagueId);
+  return count || 0;
+}
+
+async function addMember(leagueId, user, displayName) {
+  return supabase
+    .from('league_members')
+    .insert({
+      league_id: leagueId,
+      user_id: user.id,
+      display_name: displayName || user.display_name || (user.email || '').split('@')[0],
+    })
+    .select()
+    .single();
+}
+
+async function randomizeDraftOrder(leagueId) {
+  const { data: members } = await supabase.from('league_members').select('id').eq('league_id', leagueId);
+  const order = (members || []).map(m => m.id);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  await Promise.all(order.map((id, i) =>
+    supabase.from('league_members').update({ draft_order: i + 1 }).eq('id', id).eq('league_id', leagueId)));
+}
+
+// GET /api/leagues — the leagues you run or play in (admins see all)
 router.get('/', async (req, res) => {
-  const { data, error } = await supabase
+  if (!req.userId) return res.status(401).json({ error: 'Not authenticated' });
+
+  let query = supabase
     .from('leagues')
     .select(`
-      id, name, season, status, draft_started_at,
+      id, name, season, status, draft_started_at, created_by,
       league_members(count)
     `)
     .order('created_at', { ascending: false });
 
+  if (!req.isAdmin) {
+    const { data: mine } = await supabase.from('league_members').select('league_id').eq('user_id', req.userId);
+    const ids = (mine || []).map(m => m.league_id);
+    query = query.or(`created_by.eq.${req.userId}${ids.length ? `,id.in.(${ids.join(',')})` : ''}`);
+  }
+
+  const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
 
-// GET /api/leagues/:id — full league detail
+// GET /api/leagues/invite/:code — public preview shown on the invite page
+router.get('/invite/:code', async (req, res) => {
+  const { data: league } = await supabase
+    .from('leagues')
+    .select('id, name, season, status, created_by')
+    .eq('invite_code', String(req.params.code).toLowerCase())
+    .maybeSingle();
+  if (!league) return res.status(404).json({ error: 'This invite link is not valid' });
+
+  const [{ data: creator }, members] = await Promise.all([
+    supabase.from('users').select('display_name, email').eq('id', league.created_by).maybeSingle(),
+    memberCount(league.id),
+  ]);
+  res.json({
+    name: league.name,
+    season: league.season,
+    status: league.status,
+    members,
+    size: LEAGUE_SIZE,
+    commissioner: creator?.display_name || (creator?.email || '').split('@')[0] || 'the commissioner',
+  });
+});
+
+// POST /api/leagues/join — join a league with its invite code
+router.post('/join', async (req, res) => {
+  if (!req.userId) return res.status(401).json({ error: 'Sign in to join a league' });
+
+  const { data: league } = await supabase
+    .from('leagues')
+    .select('id, status')
+    .eq('invite_code', String(req.body.code || '').trim().toLowerCase())
+    .maybeSingle();
+  if (!league) return res.status(404).json({ error: 'This invite link is not valid' });
+
+  const { data: existing } = await supabase
+    .from('league_members').select('id').eq('league_id', league.id).eq('user_id', req.userId).maybeSingle();
+  if (existing) return res.json({ id: league.id, alreadyMember: true });
+
+  if (league.status !== 'setup') return res.status(400).json({ error: 'This league has already started its draft' });
+  if (await memberCount(league.id) >= LEAGUE_SIZE) return res.status(400).json({ error: `This league is full (${LEAGUE_SIZE} players)` });
+
+  const { data: user } = await supabase.from('users').select('id, email, display_name').eq('id', req.userId).single();
+  const { error } = await addMember(league.id, user);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ id: league.id });
+});
+
+// GET /api/leagues/:id — full league detail (members, commissioner and admins only)
 router.get('/:id', async (req, res) => {
+  const access = await leagueAccess(req, req.params.id);
+  if (!access.league) return res.status(404).json({ error: 'League not found' });
+  if (!access.canView) return res.status(403).json({ error: 'You are not in this league' });
+
   const { data, error } = await supabase
     .from('leagues')
     .select(`
@@ -46,34 +139,61 @@ router.get('/:id', async (req, res) => {
   res.json(data);
 });
 
-// POST /api/leagues — create league (admin only)
-router.post('/', requireAdmin, async (req, res) => {
-  const { name, season } = req.body;
-  if (!name || !season) return res.status(400).json({ error: 'name and season required' });
+// POST /api/leagues — create a league. The creator is its commissioner and may or may not play.
+router.post('/', async (req, res) => {
+  if (!req.userId) return res.status(401).json({ error: 'Sign in to create a league' });
 
-  const { data, error } = await supabase
-    .from('leagues')
-    .insert({ name, season: parseInt(season), created_by: req.userId })
-    .select()
-    .single();
+  const name = String(req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'League name required' });
+  if (name.length > 60) return res.status(400).json({ error: 'League name is too long (60 characters max)' });
 
+  const season = req.isAdmin && req.body.season ? parseInt(req.body.season) : CURRENT_SEASON;
+  const play = req.body.play !== false;
+
+  let league, error;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    ({ data: league, error } = await supabase
+      .from('leagues')
+      .insert({ name, season, created_by: req.userId, invite_code: crypto.randomBytes(5).toString('hex') })
+      .select()
+      .single());
+    if (!error || error.code !== '23505') break; // retry only on an invite-code collision
+  }
   if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+
+  if (play) {
+    const { data: user } = await supabase.from('users').select('id, email, display_name').eq('id', req.userId).single();
+    const { error: mErr } = await addMember(league.id, user);
+    if (mErr) return res.status(500).json({ error: mErr.message });
+  }
+  res.json(league);
 });
 
-// PATCH /api/leagues/:id — update status etc (admin only)
-router.patch('/:id', requireAdmin, async (req, res) => {
-  const allowed = ['name', 'status'];
+// PATCH /api/leagues/:id — rename or change status (commissioner; admins can set any status)
+router.patch('/:id', async (req, res) => {
+  const access = await leagueAccess(req, req.params.id);
+  if (!access.league) return res.status(404).json({ error: 'League not found' });
+  if (!access.canManage) return res.status(403).json({ error: 'Only the commissioner can do that' });
+
   const updates = {};
-  for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
+  if (req.body.name !== undefined) updates.name = String(req.body.name).trim().slice(0, 60);
+  if (req.body.status !== undefined) {
+    // Commissioners can start the draft; any other status change is for admins
+    if (!req.isAdmin && !(req.body.status === 'drafting' && access.league.status === 'setup')) {
+      return res.status(403).json({ error: 'Only an admin can change the league status like that' });
+    }
+    updates.status = req.body.status;
+  }
 
   // A real league needs exactly 7 members to draft; admins can force it for testing
-  if (updates.status === 'drafting' && !req.body.force) {
-    const { count } = await supabase
-      .from('league_members').select('*', { count: 'exact', head: true }).eq('league_id', req.params.id);
-    if (count !== LEAGUE_SIZE) {
+  if (updates.status === 'drafting') {
+    const count = await memberCount(req.params.id);
+    if (count !== LEAGUE_SIZE && !(req.isAdmin && req.body.force)) {
       return res.status(400).json({ error: `A league needs exactly ${LEAGUE_SIZE} members to start the draft (has ${count}).` });
     }
+    // Nobody set the order yet → randomize it
+    const { data: members } = await supabase.from('league_members').select('draft_order').eq('league_id', req.params.id);
+    if ((members || []).some(m => m.draft_order == null)) await randomizeDraftOrder(req.params.id);
   }
 
   const { data, error } = await supabase
@@ -87,35 +207,30 @@ router.patch('/:id', requireAdmin, async (req, res) => {
   res.json(data);
 });
 
-// POST /api/leagues/:id/members — add member (admin only)
-router.post('/:id/members', requireAdmin, async (req, res) => {
+// POST /api/leagues/:id/members — add a member by email (commissioner; they need an account)
+router.post('/:id/members', async (req, res) => {
+  const access = await leagueAccess(req, req.params.id);
+  if (!access.league) return res.status(404).json({ error: 'League not found' });
+  if (!access.canManage) return res.status(403).json({ error: 'Only the commissioner can add members' });
+  if (access.league.status !== 'setup' && !req.isAdmin) return res.status(400).json({ error: 'The draft has started — the roster of players is locked' });
+
   const { email, display_name } = req.body;
   if (!email) return res.status(400).json({ error: 'email required' });
 
-  const { count } = await supabase
-    .from('league_members').select('*', { count: 'exact', head: true }).eq('league_id', req.params.id);
-  if (count >= LEAGUE_SIZE) return res.status(400).json({ error: `League is full (${LEAGUE_SIZE} members max).` });
+  if (await memberCount(req.params.id) >= LEAGUE_SIZE) {
+    return res.status(400).json({ error: `League is full (${LEAGUE_SIZE} members max).` });
+  }
 
-  // Find user by email
   const { data: user } = await supabase
     .from('users')
-    .select('id, display_name')
+    .select('id, email, display_name')
     .eq('email', email.toLowerCase().trim())
-    .single();
+    .maybeSingle();
 
-  if (!user) return res.status(404).json({ error: 'No user with that email. They must sign in first.' });
+  if (!user) return res.status(404).json({ error: 'No user with that email. They must create an account first — or send them the invite link.' });
 
-  const { data, error } = await supabase
-    .from('league_members')
-    .insert({
-      league_id: req.params.id,
-      user_id: user.id,
-      display_name: display_name || user.display_name || email.split('@')[0],
-    })
-    .select()
-    .single();
-
-  if (error) return res.status(500).json({ error: error.message });
+  const { data, error } = await addMember(req.params.id, user, display_name);
+  if (error) return res.status(error.code === '23505' ? 409 : 500).json({ error: error.code === '23505' ? 'Already in this league' : error.message });
   res.json(data);
 });
 
@@ -192,8 +307,13 @@ router.post('/:id/swap', async (req, res) => {
   res.json(swap);
 });
 
-// DELETE /api/leagues/:id/members/:memberId (admin only)
-router.delete('/:id/members/:memberId', requireAdmin, async (req, res) => {
+// DELETE /api/leagues/:id/members/:memberId — remove a player (commissioner, before the draft)
+router.delete('/:id/members/:memberId', async (req, res) => {
+  const access = await leagueAccess(req, req.params.id);
+  if (!access.league) return res.status(404).json({ error: 'League not found' });
+  if (!access.canManage) return res.status(403).json({ error: 'Only the commissioner can remove members' });
+  if (access.league.status !== 'setup' && !req.isAdmin) return res.status(400).json({ error: 'The draft has started — players are locked' });
+
   const { error } = await supabase
     .from('league_members')
     .delete()
@@ -204,29 +324,23 @@ router.delete('/:id/members/:memberId', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-// POST /api/leagues/:id/set-draft-order (admin only)
-router.post('/:id/set-draft-order', requireAdmin, async (req, res) => {
-  let order = req.body.order; // array of member IDs in draft order; omitted = randomize
+// POST /api/leagues/:id/set-draft-order — set or randomize the draft order (commissioner, before the draft)
+router.post('/:id/set-draft-order', async (req, res) => {
+  const access = await leagueAccess(req, req.params.id);
+  if (!access.league) return res.status(404).json({ error: 'League not found' });
+  if (!access.canManage) return res.status(403).json({ error: 'Only the commissioner can set the draft order' });
+  if (access.league.status !== 'setup' && !req.isAdmin) return res.status(400).json({ error: 'The draft has started — the order is locked' });
+
+  const order = req.body.order; // array of member IDs in draft order; omitted = randomize
   if (order === undefined) {
-    const { data: members } = await supabase.from('league_members').select('id').eq('league_id', req.params.id);
-    order = (members || []).map(m => m.id);
-    for (let i = order.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [order[i], order[j]] = [order[j], order[i]];
-    }
+    await randomizeDraftOrder(req.params.id);
+    return res.json({ ok: true });
   }
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array of member IDs' });
 
-  const updates = order.map((memberId, i) =>
-    supabase.from('league_members').update({ draft_order: i + 1 }).eq('id', memberId).eq('league_id', req.params.id)
-  );
-  await Promise.all(updates);
+  await Promise.all(order.map((memberId, i) =>
+    supabase.from('league_members').update({ draft_order: i + 1 }).eq('id', memberId).eq('league_id', req.params.id)));
   res.json({ ok: true });
 });
-
-function requireAdmin(req, res, next) {
-  if (!req.isAdmin) return res.status(403).json({ error: 'Admin only' });
-  next();
-}
 
 module.exports = router;

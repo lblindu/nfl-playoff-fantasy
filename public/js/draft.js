@@ -10,6 +10,11 @@ function myUserId() {
   return getMe()?.id || getSession()?.user?.id;
 }
 
+// The league's commissioner (or a site admin) runs the draft: undo, reset, pick for a no-show
+function isManager() {
+  return isAdmin() || (!!draftState && draftState.league?.created_by === myUserId());
+}
+
 let leagueId = null;
 let draftState = null;
 let channel = null;
@@ -60,13 +65,13 @@ function subscribeRealtime() {
 // ── Make a pick ──
 async function makePick(playerId) {
   const myMemberId = draftState.members.find(m => m.user_id === myUserId())?.id;
-  if (!myMemberId) return;
-  if (draftState.onTheClock?.id !== myMemberId && !isAdmin()) {
+  if (!myMemberId && !isManager()) return;
+  if (draftState.onTheClock?.id !== myMemberId && !isManager()) {
     toast('Not your turn', 'error');
     return;
   }
 
-  const memberId = isAdmin() && draftState.onTheClock
+  const memberId = isManager() && draftState.onTheClock
     ? draftState.onTheClock.id
     : myMemberId;
 
@@ -81,7 +86,7 @@ async function makePick(playerId) {
 function getPickingState() {
   const myMember = draftState.members.find(m => m.user_id === myUserId());
   const onClock = draftState.onTheClock;
-  const canPick = !draftState.isDone && !!onClock && ((myMember && onClock.id === myMember.id) || isAdmin());
+  const canPick = !draftState.isDone && !!onClock && ((myMember && onClock.id === myMember.id) || isManager());
   // Roster rules (one per team, QB cap) apply to whoever the pick is for
   return { myMember, canPick, member: canPick ? onClock : myMember };
 }
@@ -144,7 +149,7 @@ function renderShell() {
             <select id="team-filter" style="height:32px;width:auto;">
               <option value="">All teams</option>
             </select>
-            ${isAdmin() ? `<button class="btn btn-danger btn-sm" id="undo-btn">↩ Undo pick</button><button class="btn btn-danger btn-sm" id="reset-btn">Reset draft</button>` : ''}
+            <span id="manager-btns" class="flex gap-2"></span>
           </div>
           <div id="teams-left" style="margin-top:10px;"></div>
         </div>
@@ -169,6 +174,12 @@ function renderAll() {
   renderTeamFilter();
   renderTeamsLeft();
   updateStatusPill();
+  const mb = document.getElementById('manager-btns');
+  if (mb) {
+    mb.innerHTML = isManager()
+      ? `<button class="btn btn-danger btn-sm" id="undo-btn">↩ Undo pick</button><button class="btn btn-danger btn-sm" id="reset-btn">Reset draft</button>`
+      : '';
+  }
 }
 
 function renderTeamsLeft() {
@@ -235,7 +246,7 @@ function renderClock() {
         ${isMyTurn ? '⭐ Your pick!' : `On the clock: ${name}`}
       </span>
       ${upIn ? `<span style="font-size:12px;color:var(--text-2);">${upIn}</span>` : ''}
-      ${!isMyTurn && isAdmin() ? `<span style="font-size:12px;color:var(--gold);">Admin: you're drafting for ${name}</span>` : ''}
+      ${!isMyTurn && isManager() ? `<span style="font-size:12px;color:var(--gold);">Commissioner: you're drafting for ${name}</span>` : ''}
       <span style="font-size:12px;color:var(--text-3)">${picks.length}/${totalPicks}</span>
     </div>
   `;

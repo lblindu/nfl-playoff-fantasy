@@ -165,6 +165,7 @@
   // ── Routes ──
   route('/login', renderLogin);
   route('/',      renderHome);
+  route('/join/:code', renderJoin);
   route('/league/:id', renderLeague);
   route('/league/:id/draft', renderDraftRoom);
   route('/admin', renderAdmin);
@@ -273,6 +274,10 @@
     if (!getSession()) return navigate('/login');
     destroyDraft();
 
+    // Signed in after following an invite link → go finish joining
+    const pendingJoin = localStorage.getItem('pendingJoin');
+    if (pendingJoin) return navigate(`/join/${pendingJoin}`);
+
     document.getElementById('app').innerHTML = `
       ${navbar()}
       <div class="hero">
@@ -281,7 +286,7 @@
             <h1>Your Leagues</h1>
             <p style="color:var(--text-2);margin-top:4px;">NFL Playoffs</p>
           </div>
-          ${isAdmin() ? `<button class="btn btn-primary" id="create-league-btn">+ New League</button>` : ''}
+          <button class="btn btn-primary" id="create-league-btn">+ New League</button>
         </div>
       </div>
       <div class="page">
@@ -289,9 +294,7 @@
       </div>
     `;
 
-    if (isAdmin()) {
-      document.getElementById('create-league-btn')?.addEventListener('click', () => showCreateLeagueModal());
-    }
+    document.getElementById('create-league-btn').addEventListener('click', () => showCreateLeagueModal());
 
     try {
       const leagues = await api('GET', '/leagues');
@@ -305,7 +308,7 @@
     const el = document.getElementById('leagues-container');
     if (!el) return;
     if (!leagues.length) {
-      el.innerHTML = `<div class="empty-state"><div class="icon">🏟️</div><p>No leagues yet. ${isAdmin() ? 'Create the first one!' : 'Ask an admin to add you.'}</p></div>`;
+      el.innerHTML = `<div class="empty-state"><div class="icon">🏟️</div><p>No leagues yet. Create your own and invite 6 friends, or open an invite link from a friend to join theirs.</p></div>`;
       return;
     }
     el.innerHTML = `<div class="league-grid">${leagues.map(l => `
@@ -338,11 +341,16 @@
             <label>League Name</label>
             <input type="text" id="new-league-name" placeholder="e.g. Friday Night League" />
           </div>
-          <div class="form-group">
-            <label>Season</label>
-            <input type="number" id="new-league-season" value="2026" />
-          </div>
-          <p style="font-size:12px;color:var(--text-3);">Every league has exactly 7 players.</p>
+          ${isAdmin() ? `<div class="form-group">
+            <label>Season (admin)</label>
+            <select id="new-league-season">${seasonOptions().replace(' selected', '')}</select>
+          </div>` : ''}
+          <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;color:var(--text);margin:12px 0 4px;cursor:pointer;">
+            <input type="checkbox" id="new-league-play" checked style="margin-top:3px;" />
+            <span>I want to play in this league too
+              <span style="display:block;font-size:12px;color:var(--text-3);">Leagues have exactly 7 players. If you play you're one of them (invite 6 more); if you only run it, invite 7.</span>
+            </span>
+          </label>
           <button class="btn btn-primary btn-full mt-2" id="submit-league">Create League</button>
         </div>
       </div>
@@ -351,13 +359,65 @@
     document.getElementById('close-modal').addEventListener('click', () => document.getElementById('modal-overlay')?.remove());
     document.getElementById('submit-league').addEventListener('click', async () => {
       const name   = document.getElementById('new-league-name').value.trim();
-      const season = parseInt(document.getElementById('new-league-season').value);
+      const seasonEl = document.getElementById('new-league-season');
+      const play = document.getElementById('new-league-play').checked;
       if (!name) return toast('Name required', 'error');
       try {
-        await api('POST', '/leagues', { name, season });
+        const league = await api('POST', '/leagues', { name, play, ...(seasonEl ? { season: parseInt(seasonEl.value) } : {}) });
         document.getElementById('modal-overlay')?.remove();
-        toast('League created!', 'success');
-        renderHome();
+        toast('League created! Share the invite link to fill it.', 'success');
+        activeTab = 'manage';
+        navigate(`/league/${league.id}`);
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  }
+
+  // ── JOIN (invite link) ──
+  async function renderJoin({ code }) {
+    const app = document.getElementById('app');
+    const signedIn = !!getSession();
+    const shell = body => {
+      app.innerHTML = `
+        ${signedIn ? navbar() : `<nav class="navbar"><a class="navbar-brand" href="/" data-link><div class="navbar-logo">🏈</div><span class="navbar-title">Playoff <span>Fantasy</span></span></a></nav>`}
+        <div class="page" style="max-width:460px;padding-top:3rem;"><div class="card" style="text-align:center;padding:2rem 1.5rem;">${body}</div></div>`;
+    };
+    shell('<div class="skeleton" style="height:120px;border-radius:var(--radius);"></div>');
+
+    let info;
+    try {
+      const r = await fetch(`/api/leagues/invite/${encodeURIComponent(code)}`);
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'This invite link is not valid');
+      info = await r.json();
+    } catch (e) {
+      localStorage.removeItem('pendingJoin');
+      shell(`<div style="font-size:40px;">🤷</div><h2 style="margin:8px 0;">Invite not found</h2>
+        <p style="color:var(--text-2);">${e.message}. Ask the league commissioner for a new link.</p>
+        <a href="/" data-link class="btn btn-primary" style="margin-top:1rem;">Go home</a>`);
+      return;
+    }
+
+    const closed = info.status !== 'setup' ? 'This league has already started its draft.'
+      : info.members >= info.size ? 'This league is full.' : '';
+    shell(`
+      <div style="font-size:40px;">🏈</div>
+      <h2 style="margin:8px 0 4px;">You're invited to ${info.name}</h2>
+      <p style="color:var(--text-2);margin-bottom:4px;">${info.commissioner} is running this ${info.season} playoff league.</p>
+      <p style="color:var(--text-3);font-size:13px;">${info.members} of ${info.size} players have joined</p>
+      ${closed ? `<p style="color:var(--red);margin-top:1rem;">${closed}</p>` : `
+        <button class="btn btn-primary btn-full" id="join-btn" style="margin-top:1.25rem;">${signedIn ? 'Join league' : 'Sign in to join'}</button>`}
+      <a href="/" data-link id="join-skip" style="display:block;margin-top:1rem;font-size:13px;color:var(--text-3);">Not now</a>`);
+
+    document.getElementById('join-skip')?.addEventListener('click', () => localStorage.removeItem('pendingJoin'));
+    document.getElementById('join-btn')?.addEventListener('click', async () => {
+      if (!signedIn) {
+        localStorage.setItem('pendingJoin', code);
+        return navigate('/login');
+      }
+      try {
+        const r = await api('POST', '/leagues/join', { code });
+        localStorage.removeItem('pendingJoin');
+        toast(r.alreadyMember ? "You're already in this league" : `Welcome to ${info.name}!`, 'success');
+        navigate(`/league/${r.id}`);
       } catch (e) { toast(e.message, 'error'); }
     });
   }
@@ -377,47 +437,67 @@
         <div id="league-header" class="mb-2">
           <div class="skeleton" style="height:60px;border-radius:var(--radius);"></div>
         </div>
-        <div class="tabs mb-3">
+        <div class="tabs mb-3" id="league-tabs">
           <button class="tab active" data-tab="standings">Standings</button>
           <button class="tab" data-tab="roster">My Roster</button>
           <button class="tab" data-tab="games">Games</button>
-          ${isAdmin() ? '<button class="tab" data-tab="manage">Manage</button>' : ''}
         </div>
         <div id="tab-content"></div>
       </div>
     `;
 
-    document.querySelectorAll('.tab').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        activeTab = btn.dataset.tab;
-        loadLeagueTab(id, activeTab);
-      });
+    const bindTab = btn => btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeTab = btn.dataset.tab;
+      loadLeagueTab(id, activeTab);
     });
+    document.querySelectorAll('.tab').forEach(bindTab);
 
-    await loadLeagueHeader(id);
+    const league = await loadLeagueHeader(id);
+    if (!league) return;
+
+    // The commissioner (and admins) get a Manage tab
+    if (canManage(league)) {
+      const tabs = document.getElementById('league-tabs');
+      tabs.insertAdjacentHTML('beforeend', '<button class="tab" data-tab="manage">Manage</button>');
+      bindTab(tabs.lastElementChild);
+    } else if (activeTab === 'manage') {
+      activeTab = 'standings';
+    }
+    document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === activeTab));
     await loadLeagueTab(id, activeTab);
+  }
+
+  function canManage(league) {
+    return isAdmin() || league.created_by === getMe()?.id;
   }
 
   async function loadLeagueHeader(id) {
     try {
       const league = await api('GET', `/leagues/${id}`);
       const el = document.getElementById('league-header');
-      if (!el) return;
+      if (!el) return null;
+      const iRun = league.created_by === getMe()?.id;
       el.innerHTML = `
         <div class="flex items-center justify-between flex-wrap gap-2">
           <div class="flex items-center gap-3">
             <a href="/" data-link style="color:var(--text-3);font-size:13px;text-decoration:none;">← Leagues</a>
             <h2>${league.name}</h2>
             ${statusPill(league.status)}
+            ${iRun ? '<span style="font-size:11px;color:var(--gold);">You run this league</span>' : ''}
           </div>
           <div class="flex gap-2">
-            ${league.status === 'setup' || league.status === 'drafting' ? `<a href="/league/${id}/draft" data-link class="btn btn-primary">🎯 Enter Draft Room</a>` : ''}
+            ${league.status === 'drafting' ? `<a href="/league/${id}/draft" data-link class="btn btn-primary">🎯 Enter Draft Room</a>` : ''}
+            ${league.status === 'active' ? `<a href="/league/${id}/draft" data-link class="btn btn-ghost">View Draft</a>` : ''}
           </div>
         </div>
       `;
-    } catch (e) { toast(e.message, 'error'); }
+      return league;
+    } catch (e) {
+      toast(e.message, 'error');
+      return null;
+    }
   }
 
   async function loadLeagueTab(id, tab) {
@@ -444,10 +524,10 @@
         const games = await api('GET', `/scores/games?season=${league.season}`);
         renderGames(games);
       } catch (e) { toast(e.message, 'error'); }
-    } else if (tab === 'manage' && isAdmin()) {
+    } else if (tab === 'manage') {
       try {
         const league = await api('GET', `/leagues/${id}`);
-        renderManageTab(league);
+        if (canManage(league)) renderManageTab(league);
       } catch (e) { toast(e.message, 'error'); }
     }
   }
@@ -619,45 +699,92 @@
 
   function renderManageTab(league) {
     const el = document.getElementById('tab-content');
+    const members = league.league_members || [];
+    const me = getMe();
+    const iPlay = members.some(m => m.user_id === me?.id);
+    const iCreated = league.created_by === me?.id;
+    const open = league.status === 'setup' || isAdmin();   // roster of players locks once the draft starts
+    const inviteUrl = `${location.origin}/join/${league.invite_code}`;
+
     el.innerHTML = `
+      ${league.invite_code && league.status === 'setup' ? `
+      <div class="admin-section">
+        <div class="admin-section-header"><h3>Invite players</h3></div>
+        <p style="font-size:13px;color:var(--text-2);margin-bottom:8px;">
+          Send this link to ${Math.max(0, 7 - members.length)} more ${7 - members.length === 1 ? 'person' : 'people'}. They sign in (or create an account) and join automatically.
+        </p>
+        <div class="flex gap-2">
+          <input type="text" id="invite-url" value="${inviteUrl}" readonly style="flex:1;" />
+          <button class="btn btn-primary btn-sm" id="copy-invite-btn">Copy link</button>
+        </div>
+      </div>` : ''}
       <div class="admin-section">
         <div class="admin-section-header">
-          <h3>Members <span style="font-size:13px;font-weight:500;color:${(league.league_members || []).length === 7 ? 'var(--gold)' : 'var(--text-3)'};">${(league.league_members || []).length} of 7</span></h3>
-          <div class="flex gap-2">
-            <input type="email" id="add-member-email" placeholder="user@email.com" style="width:220px;" />
-            <button class="btn btn-primary btn-sm" id="add-member-btn">Add Member</button>
-          </div>
+          <h3>Players <span style="font-size:13px;font-weight:500;color:${members.length === 7 ? 'var(--gold)' : 'var(--text-3)'};">${members.length} of 7</span></h3>
+          ${open ? `<div class="flex gap-2">
+            ${iCreated && !iPlay ? '<button class="btn btn-ghost btn-sm" id="join-self-btn">Play too</button>' : ''}
+            <input type="email" id="add-member-email" placeholder="Add by email" style="width:200px;" />
+            <button class="btn btn-primary btn-sm" id="add-member-btn">Add</button>
+          </div>` : ''}
         </div>
+        ${iCreated && !iPlay ? '<p style="font-size:12px;color:var(--text-3);margin-bottom:8px;">You are running this league without playing. You can still manage players and run the draft.</p>' : ''}
         <table class="admin-table">
-          <thead><tr><th>Name</th><th>Email</th><th>Draft Order</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Draft Order</th><th></th></tr></thead>
           <tbody>
-            ${(league.league_members || []).map(m => `
+            ${members.length ? members.map(m => `
               <tr>
-                <td>${m.display_name}</td>
-                <td style="color:var(--text-2);">${m.email || '—'}</td>
+                <td>${m.display_name}${m.user_id === league.created_by ? ' <span style="font-size:10px;color:var(--gold);">COMMISSIONER</span>' : ''}</td>
                 <td>${m.draft_order ?? '—'}</td>
-                <td><button class="btn btn-danger btn-sm" data-remove-member="${m.id}">Remove</button></td>
+                <td>${open ? `<button class="btn btn-danger btn-sm" data-remove-member="${m.id}">Remove</button>` : ''}</td>
               </tr>
-            `).join('')}
+            `).join('') : '<tr><td colspan="3" style="color:var(--text-3);">Nobody has joined yet.</td></tr>'}
           </tbody>
         </table>
       </div>
       <div class="admin-section">
-        <div class="admin-section-header"><h3>League Status</h3></div>
-        <div class="flex gap-2 flex-wrap">
-          ${['setup','drafting','active','complete'].map(s => `
-            <button class="btn ${league.status === s ? 'btn-primary' : 'btn-ghost'} btn-sm" data-set-status="${s}">${s}</button>
-          `).join('')}
-        </div>
+        <div class="admin-section-header"><h3>${isAdmin() ? 'League Status' : 'Draft'}</h3></div>
+        ${isAdmin() ? `
+          <div class="flex gap-2 flex-wrap">
+            ${['setup','drafting','active','complete'].map(s => `
+              <button class="btn ${league.status === s ? 'btn-primary' : 'btn-ghost'} btn-sm" data-set-status="${s}">${s}</button>
+            `).join('')}
+          </div>` : league.status === 'setup' ? `
+          <p style="font-size:13px;color:var(--text-2);margin-bottom:8px;">
+            ${members.length === 7 ? 'All 7 players are in. Starting the draft locks the player list.' : `The draft can start once all 7 players have joined (${members.length} of 7 so far).`}
+          </p>
+          <button class="btn btn-primary" id="start-draft-btn" ${members.length === 7 ? '' : 'disabled'}>Start the draft</button>`
+          : `<p style="font-size:13px;color:var(--text-2);">The draft has started. Use the draft room to run it.</p>`}
       </div>
-      <div class="admin-section">
+      ${open ? `<div class="admin-section">
         <div class="admin-section-header">
           <h3>Draft Order</h3>
           <button class="btn btn-ghost btn-sm" id="randomize-order-btn">🎲 Randomize</button>
         </div>
-        <p style="font-size:13px;color:var(--text-2);">Randomize sets a random snake draft order for all members.</p>
-      </div>
+        <p style="font-size:13px;color:var(--text-2);">Randomize sets a random snake draft order. If you skip this, the order is randomized when the draft starts.</p>
+      </div>` : ''}
     `;
+
+    document.getElementById('copy-invite-btn')?.addEventListener('click', async () => {
+      const input = document.getElementById('invite-url');
+      try { await navigator.clipboard.writeText(input.value); toast('Invite link copied', 'success'); }
+      catch { input.select(); toast('Press Ctrl+C to copy the link'); }
+    });
+
+    document.getElementById('join-self-btn')?.addEventListener('click', async () => {
+      try {
+        await api('POST', `/leagues/${league.id}/members`, { email: me.email });
+        toast("You're in as a player", 'success');
+        loadLeagueTab(league.id, 'manage');
+      } catch (e) { toast(e.message, 'error'); }
+    });
+
+    document.getElementById('start-draft-btn')?.addEventListener('click', async () => {
+      if (!confirm('Start the draft? Players can no longer be added or removed.')) return;
+      try {
+        await api('PATCH', `/leagues/${league.id}`, { status: 'drafting' });
+        navigate(`/league/${league.id}/draft`);
+      } catch (e) { toast(e.message, 'error'); }
+    });
 
     document.getElementById('add-member-btn')?.addEventListener('click', async () => {
       const email = document.getElementById('add-member-email').value.trim();

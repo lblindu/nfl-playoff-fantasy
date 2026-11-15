@@ -1,13 +1,18 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../lib/supabase');
+const { leagueAccess } = require('../lib/access');
 
 // GET /api/draft/:leagueId — full draft state
 router.get('/:leagueId', async (req, res) => {
   const { leagueId } = req.params;
 
+  const access = await leagueAccess(req, leagueId);
+  if (!access.league) return res.status(404).json({ error: 'League not found' });
+  if (!access.canView) return res.status(403).json({ error: 'You are not in this league' });
+
   const [leagueRes, picksRes, membersRes] = await Promise.all([
-    supabase.from('leagues').select('id,name,season,status').eq('id', leagueId).single(),
+    supabase.from('leagues').select('id,name,season,status,created_by').eq('id', leagueId).single(),
     supabase.from('draft_picks').select(`
       id, pick_number, round, picked_at,
       member_id,
@@ -71,7 +76,9 @@ router.post('/:leagueId/pick', async (req, res) => {
   if (!expectedMember || expectedMember.id !== memberId) {
     return res.status(403).json({ error: 'Not your turn' });
   }
-  if (!req.isAdmin && expectedMember.user_id !== req.userId) {
+  // The commissioner (or an admin) may pick for whoever is on the clock, e.g. a no-show
+  const access = await leagueAccess(req, leagueId);
+  if (!access.canManage && expectedMember.user_id !== req.userId) {
     return res.status(403).json({ error: 'Not your turn' });
   }
 
@@ -132,9 +139,10 @@ router.post('/:leagueId/pick', async (req, res) => {
   res.json(pick);
 });
 
-// DELETE /api/draft/:leagueId/undo — undo last pick (admin only)
+// DELETE /api/draft/:leagueId/undo — undo last pick (commissioner or admin)
 router.delete('/:leagueId/undo', async (req, res) => {
-  if (!req.isAdmin) return res.status(403).json({ error: 'Admin only' });
+  const access = await leagueAccess(req, req.params.leagueId);
+  if (!access.canManage) return res.status(403).json({ error: 'Only the commissioner can undo picks' });
 
   const { data: last } = await supabase
     .from('draft_picks')
@@ -151,9 +159,10 @@ router.delete('/:leagueId/undo', async (req, res) => {
   res.json({ ok: true });
 });
 
-// DELETE /api/draft/:leagueId/reset — wipe all picks (admin only)
+// DELETE /api/draft/:leagueId/reset — wipe all picks (commissioner or admin)
 router.delete('/:leagueId/reset', async (req, res) => {
-  if (!req.isAdmin) return res.status(403).json({ error: 'Admin only' });
+  const access = await leagueAccess(req, req.params.leagueId);
+  if (!access.canManage) return res.status(403).json({ error: 'Only the commissioner can reset the draft' });
   const { error } = await supabase.from('draft_picks').delete().eq('league_id', req.params.leagueId);
   if (error) return res.status(500).json({ error: error.message });
   await supabase.from('leagues').update({ status: 'drafting' }).eq('id', req.params.leagueId);
