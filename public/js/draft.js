@@ -22,6 +22,35 @@ let playerList = [];
 let filterPos = 'ALL';
 let filterTeam = '';
 let filterSearch = '';
+let clockSkew = 0;      // server time minus local time, so every browser counts down together
+let tickTimer = null;
+let pollTimer = null;
+
+const clockRunning = () => !!draftState?.league?.pick_deadline && !draftState.isDone;
+const msLeft = () => Date.parse(draftState.league.pick_deadline) - (Date.now() + clockSkew);
+const fmtClock = ms => { const s = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+
+function tickClock() {
+  const el = document.getElementById('clock-timer');
+  if (!el || !draftState || !clockRunning()) return;
+  const ms = msLeft();
+  el.textContent = ms <= 0 ? 'Auto-picking…' : fmtClock(ms);
+  el.style.color = ms <= 10000 ? 'var(--red)' : 'var(--text)';
+}
+
+// Light refresh: new picks/clock changes show up even if a realtime event is missed
+async function pollDraft() {
+  try {
+    const fresh = await api('GET', `/draft/${leagueId}`);
+    const changed = fresh.picks.length !== draftState?.picks.length
+      || fresh.league.pick_deadline !== draftState?.league.pick_deadline;
+    if (!changed) return;
+    if (fresh.picks.length !== draftState?.picks.length) { await loadDraft(); return; }
+    draftState = fresh;
+    clockSkew = Date.parse(fresh.serverNow) - Date.now();
+    renderAll();
+  } catch { /* transient */ }
+}
 
 // ── Entry point ──
 export async function initDraft(params) {
@@ -31,12 +60,16 @@ export async function initDraft(params) {
   await loadDraft();
   subscribeRealtime();
   bindEvents();
+  clearInterval(tickTimer); clearInterval(pollTimer);
+  tickTimer = setInterval(tickClock, 250);
+  pollTimer = setInterval(pollDraft, 4000);
 }
 
 // ── Load draft state ──
 async function loadDraft() {
   try {
     draftState = await api('GET', `/draft/${leagueId}`);
+    clockSkew = Date.parse(draftState.serverNow) - Date.now();
     const [season] = [draftState.league.season];
     playerList = await api('GET', `/players?season=${season}&leagueId=${leagueId}`);
     renderAll();
@@ -86,7 +119,9 @@ async function makePick(playerId) {
 function getPickingState() {
   const myMember = draftState.members.find(m => m.user_id === myUserId());
   const onClock = draftState.onTheClock;
-  const canPick = !draftState.isDone && !!onClock && ((myMember && onClock.id === myMember.id) || isManager());
+  const myTurn = !!myMember && !!onClock && onClock.id === myMember.id;
+  // Non-managers can only pick while the clock is running
+  const canPick = !draftState.isDone && !!onClock && ((myTurn && clockRunning()) || isManager());
   // Roster rules (one per team, QB cap) apply to whoever the pick is for
   return { myMember, canPick, member: canPick ? onClock : myMember };
 }
@@ -178,7 +213,7 @@ function renderAll() {
   const mb = document.getElementById('manager-btns');
   if (mb) {
     mb.innerHTML = isManager()
-      ? `<button class="btn btn-danger btn-sm" id="undo-btn">↩ Undo pick</button><button class="btn btn-danger btn-sm" id="reset-btn">Reset draft</button>`
+      ? `<button class="btn ${clockRunning() ? 'btn-ghost' : 'btn-primary'} btn-sm" id="clock-btn">${clockRunning() ? '⏸ Pause clock' : (draftState.picks.length ? '▶ Resume clock' : '▶ Start draft')}</button><button class="btn btn-danger btn-sm" id="undo-btn">↩ Undo pick</button><button class="btn btn-danger btn-sm" id="reset-btn">Reset draft</button>`
       : '';
   }
 }
@@ -240,8 +275,15 @@ function renderClock() {
     }
   }
 
+  const running = clockRunning();
+  const timer = running
+    ? `<span id="clock-timer" style="font-family:var(--font-mono);font-size:22px;font-weight:700;min-width:64px;">${fmtClock(msLeft())}</span>`
+    : `<span style="font-size:13px;font-weight:600;color:var(--gold);">${picks.length ? '⏸ Clock paused' : '⏳ Waiting for the commissioner to start the draft'}</span>`;
+
   el.innerHTML = `
     <div class="flex items-center gap-2" style="flex-wrap:wrap;">
+      ${timer}
+      <span style="font-size:11px;color:var(--text-3);">${draftState.league.pick_seconds || 60}s per pick</span>
       <span class="pill pill-live"><span class="pill-dot pulse"></span>Pick ${pickNum} · Round ${round}</span>
       <span style="font-size:14px;font-weight:600;color:${isMyTurn ? 'var(--gold)' : 'var(--text)'}">
         ${isMyTurn ? '⭐ Your pick!' : `On the clock: ${name}`}
@@ -334,7 +376,7 @@ function renderPlayerList() {
           </div>
         </div>
         ${p.reg_season_points != null ? `<div style="text-align:right;min-width:44px;"><div style="font-size:13px;font-weight:600;color:var(--text);">${fmt(p.reg_season_points)}</div><div style="font-size:9px;color:var(--text-3);">REG PTS</div></div>` : ''}
-        <button class="btn btn-sm ${canPick ? 'btn-primary' : 'btn-ghost'}" ${disabled ? 'disabled' : ''} data-pick="${p.id}" title="${!canPick ? 'Wait for your turn' : isQbLimit ? 'QB limit reached (2 max)' : ''}">
+        <button class="btn btn-sm ${canPick ? 'btn-primary' : 'btn-ghost'}" ${disabled ? 'disabled' : ''} data-pick="${p.id}" title="${!canPick ? (clockRunning() ? 'Wait for your turn' : 'Waiting for the commissioner to start the clock') : isQbLimit ? 'QB limit reached (2 max)' : ''}">
           ${!canPick ? 'Wait' : isQbLimit ? 'QB max' : 'Draft'}
         </button>
       </div>
@@ -370,6 +412,7 @@ function renderDraftBoard() {
               ${team ? `<span style="font-size:10px;font-weight:600;color:var(--text-2);">${team.abbr}</span>` : ''}
               <span class="pos pos-${player?.position}" style="font-size:9px;">${player?.position}</span>
               <span style="font-size:12px;color:var(--text);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player?.name}</span>
+              ${p.auto_picked ? '<span title="Auto-picked when the clock ran out" style="font-size:9px;font-weight:700;color:var(--gold);">AUTO</span>' : ''}
             </div>
           `;
         }).join('')}
@@ -434,6 +477,11 @@ function bindEvents() {
       return;
     }
     // Undo
+    if (e.target.id === 'clock-btn') {
+      api('POST', `/draft/${leagueId}/clock`, { action: clockRunning() ? 'pause' : 'start' })
+        .then(loadDraft).catch(err => toast(err.message, 'error'));
+      return;
+    }
     if (e.target.id === 'undo-btn') {
       undoPick();
       return;
@@ -460,4 +508,5 @@ function bindEvents() {
 // Cleanup on navigation away
 export function destroyDraft() {
   if (channel) { channel.unsubscribe(); channel = null; }
+  clearInterval(tickTimer); clearInterval(pollTimer);
 }

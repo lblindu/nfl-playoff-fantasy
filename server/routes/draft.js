@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../lib/supabase');
 const { leagueAccess } = require('../lib/access');
+const { attemptPick, memberOnClock, deadlineFrom } = require('../lib/draftEngine');
 
 // GET /api/draft/:leagueId — full draft state
 router.get('/:leagueId', async (req, res) => {
@@ -12,9 +13,9 @@ router.get('/:leagueId', async (req, res) => {
   if (!access.canView) return res.status(403).json({ error: 'You are not in this league' });
 
   const [leagueRes, picksRes, membersRes] = await Promise.all([
-    supabase.from('leagues').select('id,name,season,status,created_by').eq('id', leagueId).single(),
+    supabase.from('leagues').select('id,name,season,status,created_by,pick_seconds,pick_deadline').eq('id', leagueId).single(),
     supabase.from('draft_picks').select(`
-      id, pick_number, round, picked_at,
+      id, pick_number, round, picked_at, auto_picked,
       member_id,
       players(id, name, position, jersey_number, nfl_team_id, nfl_teams(id, name, abbr, primary_color))
     `).eq('league_id', leagueId).order('pick_number'),
@@ -42,7 +43,7 @@ router.get('/:leagueId', async (req, res) => {
     onTheClock = sortedMembers[teamIdx] || null;
   }
 
-  res.json({ league, picks, members, onTheClock, isDone, totalPicks });
+  res.json({ league, picks, members, onTheClock, isDone, totalPicks, serverNow: new Date().toISOString() });
 });
 
 // POST /api/draft/:leagueId/pick — make a pick
@@ -51,92 +52,45 @@ router.post('/:leagueId/pick', async (req, res) => {
   const { playerId, memberId } = req.body;
 
   if (!playerId || !memberId) return res.status(400).json({ error: 'playerId and memberId required' });
-
   if (!req.userId) return res.status(401).json({ error: 'Not authenticated' });
 
-  // Validate it's this member's turn
-  const { data: picks } = await supabase
-    .from('draft_picks')
-    .select('id')
-    .eq('league_id', leagueId);
-
-  const { data: members } = await supabase
-    .from('league_members')
-    .select('id, draft_order, user_id')
-    .eq('league_id', leagueId)
-    .order('draft_order');
-
-  const numTeams = members?.length || 0;
-  const pickNum = picks?.length || 0;
-  const round = Math.floor(pickNum / numTeams);
-  const slot = pickNum % numTeams;
-  const teamIdx = round % 2 === 0 ? slot : numTeams - 1 - slot;
-  const expectedMember = members[teamIdx];
-
-  if (!expectedMember || expectedMember.id !== memberId) {
-    return res.status(403).json({ error: 'Not your turn' });
-  }
-  // The commissioner (or an admin) may pick for whoever is on the clock, e.g. a no-show
   const access = await leagueAccess(req, leagueId);
-  if (!access.canManage && expectedMember.user_id !== req.userId) {
-    return res.status(403).json({ error: 'Not your turn' });
+  if (!access.league) return res.status(404).json({ error: 'League not found' });
+
+  const [{ data: members }, { count }, { data: league }] = await Promise.all([
+    supabase.from('league_members').select('id, draft_order, user_id').eq('league_id', leagueId),
+    supabase.from('draft_picks').select('id', { count: 'exact', head: true }).eq('league_id', leagueId),
+    supabase.from('leagues').select('status, pick_deadline').eq('id', leagueId).single(),
+  ]);
+
+  const expected = memberOnClock(members || [], count || 0);
+  if (!expected || expected.id !== memberId) return res.status(403).json({ error: 'Not your turn' });
+  // The commissioner (or an admin) may pick for whoever is on the clock, e.g. a no-show
+  if (!access.canManage && expected.user_id !== req.userId) return res.status(403).json({ error: 'Not your turn' });
+  // Everyone else waits for the commissioner to start the clock (and can't pick while it is paused)
+  if (!access.canManage && !league?.pick_deadline) {
+    return res.status(403).json({ error: 'The draft clock is not running - wait for the commissioner to start it' });
   }
 
-  // Check player not already drafted
-  const { data: existing } = await supabase
-    .from('draft_picks')
-    .select('id')
-    .eq('league_id', leagueId)
-    .eq('player_id', playerId)
-    .single();
+  const r = await attemptPick({ leagueId, memberId, playerId });
+  if (r.error) return res.status(r.status).json({ error: r.error });
+  res.json(r.pick);
+});
 
-  if (existing) return res.status(409).json({ error: 'Player already drafted' });
+// POST /api/draft/:leagueId/clock — commissioner starts or pauses the pick clock
+router.post('/:leagueId/clock', async (req, res) => {
+  const access = await leagueAccess(req, req.params.leagueId);
+  if (!access.league) return res.status(404).json({ error: 'League not found' });
+  if (!access.canManage) return res.status(403).json({ error: 'Only the commissioner can control the clock' });
+  if (access.league.status !== 'drafting') return res.status(400).json({ error: 'The league is not drafting' });
 
-  // Check QB rule (max 2 QBs per team)
-  const { data: player } = await supabase
-    .from('players')
-    .select('id, position, nfl_team_id')
-    .eq('id', playerId)
-    .single();
-  if (!player) return res.status(404).json({ error: 'Player not found' });
-
-  const { data: memberPicks } = await supabase
-    .from('draft_picks')
-    .select('players(position, nfl_team_id)')
-    .eq('league_id', leagueId)
-    .eq('member_id', memberId);
-
-  // One player per NFL team on each roster
-  if ((memberPicks || []).some(p => p.players?.nfl_team_id === player.nfl_team_id)) {
-    return res.status(400).json({ error: 'You already drafted a player from that team' });
-  }
-
-  if (player.position === 'QB') {
-    const qbCount = (memberPicks || []).filter(p => p.players?.position === 'QB').length;
-    if (qbCount >= 2) return res.status(400).json({ error: 'Maximum 2 QBs per roster' });
-  }
-
-  // Insert pick
-  const { data: pick, error } = await supabase
-    .from('draft_picks')
-    .insert({
-      league_id: leagueId,
-      member_id: memberId,
-      player_id: playerId,
-      pick_number: pickNum + 1,
-      round: round + 1,
-    })
-    .select()
-    .single();
-
+  const action = req.body.action;
+  if (!['start', 'pause'].includes(action)) return res.status(400).json({ error: 'action must be start or pause' });
+  const { data: league } = await supabase.from('leagues').select('pick_seconds').eq('id', req.params.leagueId).single();
+  const pick_deadline = action === 'start' ? deadlineFrom(league.pick_seconds || 60) : null;
+  const { error } = await supabase.from('leagues').update({ pick_deadline }).eq('id', req.params.leagueId);
   if (error) return res.status(500).json({ error: error.message });
-
-  // If draft is complete, update league status
-  if (pickNum + 1 >= numTeams * 14) {
-    await supabase.from('leagues').update({ status: 'active' }).eq('id', leagueId);
-  }
-
-  res.json(pick);
+  res.json({ ok: true, pick_deadline });
 });
 
 // DELETE /api/draft/:leagueId/undo — undo last pick (commissioner or admin)
@@ -156,6 +110,11 @@ router.delete('/:leagueId/undo', async (req, res) => {
 
   const { error } = await supabase.from('draft_picks').delete().eq('id', last.id);
   if (error) return res.status(500).json({ error: error.message });
+  // Give the restored pick a fresh full clock (only if the clock was running)
+  const { data: lg } = await supabase.from('leagues').select('pick_seconds').eq('id', req.params.leagueId).single();
+  await supabase.from('leagues')
+    .update({ status: 'drafting', pick_deadline: deadlineFrom(lg?.pick_seconds || 60) })
+    .eq('id', req.params.leagueId).not('pick_deadline', 'is', null);
   res.json({ ok: true });
 });
 
@@ -165,7 +124,7 @@ router.delete('/:leagueId/reset', async (req, res) => {
   if (!access.canManage) return res.status(403).json({ error: 'Only the commissioner can reset the draft' });
   const { error } = await supabase.from('draft_picks').delete().eq('league_id', req.params.leagueId);
   if (error) return res.status(500).json({ error: error.message });
-  await supabase.from('leagues').update({ status: 'drafting' }).eq('id', req.params.leagueId);
+  await supabase.from('leagues').update({ status: 'drafting', pick_deadline: null }).eq('id', req.params.leagueId);
   res.json({ ok: true });
 });
 

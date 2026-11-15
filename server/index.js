@@ -4,6 +4,7 @@ const cors = require('cors');
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 const { startScoringJob } = require('./jobs/scoring');
+const { startDraftClock } = require('./lib/draftEngine');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -60,4 +61,5 @@ app.get('*', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🏈 Playoff Fantasy server running on port ${PORT}`);
   startScoringJob();
+  startDraftClock();
 });

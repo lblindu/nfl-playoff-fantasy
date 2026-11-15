@@ -149,12 +149,13 @@ router.post('/', async (req, res) => {
 
   const season = req.isAdmin && req.body.season ? parseInt(req.body.season) : CURRENT_SEASON;
   const play = req.body.play !== false;
+  const pickSeconds = [30, 60, 90].includes(Number(req.body.pick_seconds)) ? Number(req.body.pick_seconds) : 60;
 
   let league, error;
   for (let attempt = 0; attempt < 3; attempt++) {
     ({ data: league, error } = await supabase
       .from('leagues')
-      .insert({ name, season, created_by: req.userId, invite_code: crypto.randomBytes(5).toString('hex') })
+      .insert({ name, season, pick_seconds: pickSeconds, created_by: req.userId, invite_code: crypto.randomBytes(5).toString('hex') })
       .select()
       .single());
     if (!error || error.code !== '23505') break; // retry only on an invite-code collision
@@ -177,6 +178,10 @@ router.patch('/:id', async (req, res) => {
 
   const updates = {};
   if (req.body.name !== undefined) updates.name = String(req.body.name).trim().slice(0, 60);
+  if (req.body.pick_seconds !== undefined) {
+    if (![30, 60, 90].includes(Number(req.body.pick_seconds))) return res.status(400).json({ error: 'Pick timer must be 30, 60 or 90 seconds' });
+    updates.pick_seconds = Number(req.body.pick_seconds);
+  }
   if (req.body.status !== undefined) {
     // Commissioners can start the draft; any other status change is for admins
     if (!req.isAdmin && !(req.body.status === 'drafting' && access.league.status === 'setup')) {

@@ -243,3 +243,8 @@ create policy "roster_swaps_read" on public.roster_swaps for select using (auth.
 -- League invites: commissioners share /join/<invite_code>
 alter table public.leagues add column if not exists invite_code text unique;
 update public.leagues set invite_code = substr(md5(random()::text || id::text), 1, 10) where invite_code is null;
+
+-- Draft clock: seconds per pick (30/60/90), running deadline (null = not started / paused), auto-pick flag
+alter table public.leagues add column if not exists pick_seconds int not null default 60 check (pick_seconds in (30, 60, 90));
+alter table public.leagues add column if not exists pick_deadline timestamptz;
+alter table public.draft_picks add column if not exists auto_picked boolean not null default false;
