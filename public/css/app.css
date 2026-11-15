@@ -356,6 +356,7 @@ label {
   border-bottom: 1px solid var(--border);
   gap: 0;
   overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .tab {

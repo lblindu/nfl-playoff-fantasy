@@ -522,7 +522,7 @@
       const iRun = league.created_by === getMe()?.id;
       el.innerHTML = `
         <div class="flex items-center justify-between flex-wrap gap-2">
-          <div class="flex items-center gap-3">
+          <div class="flex items-center" style="gap:14px;flex-wrap:wrap;">
             <a href="/" data-link style="color:var(--text-3);font-size:13px;text-decoration:none;">← Leagues</a>
             <h2>${league.name}</h2>
             ${statusPill(league.status)}
