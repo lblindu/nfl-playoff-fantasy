@@ -695,14 +695,14 @@
                 ${r.swap?.canSwap ? `<div style="margin-top:6px;"><button class="btn btn-primary btn-sm" data-swap-out="${p.id}">Replace ${p.name.split(' ').pop()}</button>
                   <span style="font-size:11px;color:var(--text-3);">${r.swap.nextGame ? `before ${t.abbr}'s ${r.swap.nextGame.playoff_round} game` : 'admin test mode'}</span></div>` : ''}
               </div>
-              <div class="flex gap-2">
+              <div class="flex" style="gap:0;flex:none;">
                 ${rounds.map(round => `
-                  <div style="text-align:center;">
+                  <div style="text-align:center;width:50px;">
                     <div style="font-size:9px;color:var(--text-3);">${round.slice(0,3)}</div>
                     <div style="font-size:12px;font-weight:600;font-family:var(--font-mono);">${r.scores[round] != null ? fmt(r.scores[round]) : '—'}</div>
                   </div>
                 `).join('')}
-                <div style="text-align:center;min-width:40px;">
+                <div style="text-align:center;width:58px;">
                   <div style="font-size:9px;color:var(--text-3);">Total</div>
                   <div style="font-size:13px;font-weight:700;color:var(--gold);font-family:var(--font-mono);">${fmt(r.total)}</div>
                 </div>
