@@ -3,27 +3,16 @@ const router = express.Router();
 const supabase = require('../lib/supabase');
 const { getPostseasonGames } = require('../lib/apiSports');
 const { refreshGameStats } = require('../jobs/scoring');
+const { computeLeagueStandings } = require('../lib/standings');
 const { buildChain, activePlayerAt, gameTime, findNextGame } = require('../lib/rosters');
 
 // GET /api/scores/standings/:leagueId
 router.get('/standings/:leagueId', async (req, res) => {
-  const { data, error } = await supabase
-    .from('league_members')
-    .select(`
-      id, display_name, total_score,
-      member_round_scores(playoff_round, points),
-      draft_picks(
-        players(
-          id, name, position,
-          nfl_teams(name, abbr, primary_color, is_eliminated)
-        )
-      )
-    `)
-    .eq('league_id', req.params.leagueId)
-    .order('total_score', { ascending: false });
-
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+  try {
+    res.json(await computeLeagueStandings(req.params.leagueId));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // GET /api/scores/roster/:leagueId/:memberId

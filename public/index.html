@@ -130,6 +130,28 @@
     .standings-row.header { font-size: 11px; font-weight: 600; color: var(--text-3); padding: 6px 1rem; }
     .round-score { text-align: right; min-width: 44px; font-family: var(--font-mono); font-size: 12px; }
 
+    .st-wrap { overflow-x: auto; }
+    .st-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .st-table th { font-size: 11px; font-weight: 600; color: var(--text-3); text-align: right; padding: 8px 10px; white-space: nowrap; }
+    .st-table td { padding: 10px; border-top: 1px solid var(--border); text-align: right; font-family: var(--font-mono); white-space: nowrap; }
+    .st-table th.l, .st-table td.l { text-align: left; font-family: inherit; }
+    .st-row { cursor: pointer; }
+    .st-row:hover { background: var(--bg-raised); }
+    .st-row.me { background: var(--gold-dim); }
+    .st-best { color: var(--gold); font-weight: 700; }
+    .st-sub { display: block; font-size: 10px; color: var(--text-3); font-weight: 400; }
+    .st-detail td { padding: 0; background: var(--bg-raised); }
+    .st-detail-in { padding: 8px 14px 12px; text-align: left; }
+    .grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 14px; }
+    @media (max-width: 520px) { .grid-cards { grid-template-columns: 1fr; } }
+    .rg { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .rg th { font-size: 10px; color: var(--text-3); font-weight: 600; text-align: right; padding: 4px 6px; }
+    .rg td { padding: 4px 6px; border-top: 1px solid var(--border); text-align: right; font-family: var(--font-mono); }
+    .rg th.l, .rg td.l { text-align: left; font-family: inherit; }
+    .rg tr.dead td.l { opacity: .45; text-decoration: line-through; }
+    .rg tfoot td { font-weight: 700; border-top: 2px solid var(--border); }
+    .rg .z { color: var(--text-3); }
+
     /* ── Roster modal / section ── */
     .roster-player-row {
       display: flex;
@@ -453,6 +475,7 @@
         </div>
         <div class="tabs mb-3" id="league-tabs">
           <button class="tab active" data-tab="standings">Standings</button>
+          <button class="tab" data-tab="grid">All Rosters</button>
           <button class="tab" data-tab="roster">My Roster</button>
           <button class="tab" data-tab="games">Games</button>
         </div>
@@ -523,6 +546,11 @@
         const data = await api('GET', `/scores/standings/${id}`);
         renderStandings(data);
       } catch (e) { toast(e.message, 'error'); }
+    } else if (tab === 'grid') {
+      try {
+        const data = await api('GET', `/scores/standings/${id}`);
+        renderRosterGrid(data);
+      } catch (e) { toast(e.message, 'error'); }
     } else if (tab === 'roster') {
       try {
         const me = getMe();
@@ -546,32 +574,94 @@
     }
   }
 
-  function renderStandings(members) {
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const medal = r => r === 1 ? '🥇' : r === 2 ? '🥈' : r === 3 ? '🥉' : r;
+
+  function renderStandings(data) {
     const el = document.getElementById('tab-content');
-    const rounds = ['Wildcard', 'Divisional', 'Conference', 'Superbowl'];
+    const { rounds, started, members } = data;
+    const meId = getMe()?.id;
+    if (!members.length) { el.innerHTML = `<div class="empty-state"><div class="icon">🏆</div><p>No members yet.</p></div>`; return; }
+    const noPoints = members.every(m => m.total === 0);
+    const hot = started.length ? started[started.length - 1] : null;
+    const hotLeader = hot ? members.find(m => m.roundRank[hot] === 1) : null;
+
     el.innerHTML = `
-      <div class="card" style="padding:0;overflow:hidden;">
-        <div class="standings-row header">
-          <span>#</span>
-          <span>Member</span>
-          ${rounds.map(r => `<span class="round-score">${r.slice(0,3)}</span>`).join('')}
-          <span class="round-score" style="color:var(--gold);">Total</span>
-        </div>
-        ${members.map((m, i) => {
-          const roundScores = rounds.map(r => {
-            const rs = m.member_round_scores?.find(s => s.playoff_round === r);
-            return `<span class="round-score" style="color:var(--text-2);">${rs ? fmt(rs.points) : '—'}</span>`;
-          }).join('');
-          return `
-            <div class="standings-row" onclick="showMemberRoster('${m.id}')" style="cursor:pointer;">
-              <span class="rank rank-${i+1}">${i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i+1}</span>
-              <span style="font-weight:500;">${m.display_name}</span>
-              ${roundScores}
-              <span class="stat-num highlight">${fmt(m.total_score)}</span>
-            </div>
-          `;
-        }).join('')}
+      ${noPoints ? `<p style="font-size:12px;color:var(--text-3);margin-bottom:10px;">No points yet — standings update as playoff games are scored.</p>` : ''}
+      ${hotLeader ? `<p style="font-size:12px;color:var(--text-2);margin-bottom:10px;">Top score in ${hot}: <b style="color:var(--gold);">${esc(hotLeader.display_name)}</b> (${fmt(hotLeader.byRound[hot])})</p>` : ''}
+      <div class="card st-wrap" style="padding:0;">
+        <table class="st-table">
+          <thead><tr>
+            <th class="l">#</th><th class="l">Member</th>
+            ${rounds.map(r => `<th>${r === 'Superbowl' ? 'SB' : r.slice(0, 3)}</th>`).join('')}
+            <th style="color:var(--gold);">Total</th><th>Behind</th><th>Alive</th>
+          </tr></thead>
+          <tbody>
+            ${members.map(m => `
+              <tr class="st-row${m.user_id === meId ? ' me' : ''}" data-m="${m.id}">
+                <td class="l rank rank-${m.rank}">${medal(m.rank)}</td>
+                <td class="l" style="font-weight:600;">${esc(m.display_name)}${m.user_id === meId ? ' <span style="font-size:10px;color:var(--gold);">YOU</span>' : ''}
+                  ${m.bestPlayer ? `<span class="st-sub">Top: ${esc(m.bestPlayer.name)} (${fmt(m.bestPlayer.total)})</span>` : ''}</td>
+                ${rounds.map(r => {
+                  const started_ = started.includes(r);
+                  return `<td class="${started_ && m.roundRank[r] === 1 ? 'st-best' : ''}" style="${started_ ? '' : 'color:var(--text-3)'}">${started_ ? fmt(m.byRound[r]) : '—'}${started_ ? `<span class="st-sub">#${m.roundRank[r]}</span>` : ''}</td>`;
+                }).join('')}
+                <td class="stat-num highlight" style="font-size:14px;">${fmt(m.total)}</td>
+                <td style="color:var(--text-3);">${m.rank === 1 ? '—' : '−' + fmt(m.behind)}</td>
+                <td style="color:${m.alive ? 'var(--text-2)' : 'var(--red)'};">${m.alive}/${m.roster.length || 14}</td>
+              </tr>
+              <tr class="st-detail" id="st-d-${m.id}" style="display:none;"><td colspan="${rounds.length + 5}"><div class="st-detail-in">${rosterTable(m, rounds)}</div></td></tr>
+            `).join('')}
+          </tbody>
+        </table>
       </div>
+      <p style="font-size:11px;color:var(--text-3);margin-top:8px;">Click a member to see their roster. Small numbers show the member's rank for that round; gold = best score of the round. Alive = players whose team is still in the playoffs.</p>
+    `;
+    el.querySelectorAll('.st-row').forEach(row => row.addEventListener('click', () => {
+      const d = document.getElementById('st-d-' + row.dataset.m);
+      d.style.display = d.style.display === 'none' ? 'table-row' : 'none';
+    }));
+  }
+
+  // One member's roster as a rounds table (shared by standings detail + All Rosters)
+  function rosterTable(m, rounds) {
+    if (!m.roster.length) return `<span style="font-size:12px;color:var(--text-3);">No picks yet.</span>`;
+    const cell = v => v ? `<td>${fmt(v)}</td>` : `<td class="z">0</td>`;
+    return `
+      <table class="rg">
+        <thead><tr><th class="l">Player</th>${rounds.map(r => `<th>${r === 'Superbowl' ? 'SB' : r.slice(0, 3)}</th>`).join('')}<th>Total</th></tr></thead>
+        <tbody>
+          ${m.roster.map(s => `
+            <tr class="${s.eliminated ? 'dead' : ''}">
+              <td class="l"><span class="${posClass(s.position)}">${s.position}</span> ${esc(s.name)}
+                <span style="color:var(--text-3);font-size:10px;">${esc(s.team || '')}</span>
+                ${s.out ? '<span style="font-size:9px;font-weight:700;color:var(--red);">OUT</span>' : ''}
+                ${s.replaced.map(x => `<div style="font-size:10px;color:var(--text-3);">↳ replaced ${esc(x.name)} (kept ${fmt(x.total)})</div>`).join('')}</td>
+              ${rounds.map(r => cell(s.scores[r])).join('')}
+              <td style="font-weight:700;">${fmt(s.total)}</td>
+            </tr>`).join('')}
+        </tbody>
+        <tfoot><tr><td class="l">TOTAL</td>${rounds.map(r => `<td>${fmt(m.byRound[r])}</td>`).join('')}<td style="color:var(--gold);">${fmt(m.total)}</td></tr></tfoot>
+      </table>`;
+  }
+
+  function renderRosterGrid(data) {
+    const el = document.getElementById('tab-content');
+    const { rounds, members } = data;
+    const meId = getMe()?.id;
+    if (!members.length) { el.innerHTML = `<div class="empty-state"><div class="icon">📋</div><p>No members yet.</p></div>`; return; }
+    el.innerHTML = `
+      <div class="grid-cards">
+        ${members.map(m => `
+          <div class="card" style="${m.user_id === meId ? 'border-color:var(--gold-border);' : ''}">
+            <div class="flex items-center justify-between mb-2">
+              <h3>${medal(m.rank)} ${esc(m.display_name)}${m.user_id === meId ? ' <span style="font-size:10px;color:var(--gold);">YOU</span>' : ''}</h3>
+              <span class="stat-num highlight">${fmt(m.total)}</span>
+            </div>
+            ${rosterTable(m, rounds)}
+          </div>`).join('')}
+      </div>
+      <p style="font-size:11px;color:var(--text-3);margin-top:10px;">Struck-through players' teams are eliminated. Replaced players keep the points they earned.</p>
     `;
   }
 
