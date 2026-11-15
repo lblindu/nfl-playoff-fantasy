@@ -7,6 +7,19 @@ const r2 = n => Math.round(n * 100) / 100;
 // Live standings for a league, computed straight from game scores + injury-swap chains
 // (so it never depends on cached totals). Returns { rounds, members } sorted by total.
 async function computeLeagueStandings(leagueId) {
+  const { data: lg } = await supabase.from('leagues').select('season').eq('id', leagueId).single();
+  // A team is out once it loses a finished playoff game (the round of that loss is recorded)
+  const elim = new Map();
+  if (lg) {
+    const { data: games } = await supabase.from('games')
+      .select('home_team_id, away_team_id, home_score, away_score, status, playoff_round, game_date')
+      .eq('season', lg.season).in('status', ['FT', 'OT', 'AOT']).order('game_date');
+    for (const g of games || []) {
+      if (g.home_score == null || g.away_score == null || g.home_score === g.away_score) continue;
+      elim.set(g.home_score < g.away_score ? g.home_team_id : g.away_team_id, g.playoff_round);
+    }
+  }
+
   const [membersRes, picksRes, swapsRes] = await Promise.all([
     supabase.from('league_members').select('id, display_name, user_id').eq('league_id', leagueId),
     supabase.from('draft_picks').select('member_id, pick_number, player_id').eq('league_id', leagueId).order('pick_number'),
@@ -29,7 +42,7 @@ async function computeLeagueStandings(leagueId) {
   if (ids.length) {
     const [playersRes, scoresRes] = await Promise.all([
       supabase.from('players')
-        .select('id, name, position, injury_status, nfl_teams(abbr, primary_color, is_eliminated)')
+        .select('id, name, position, injury_status, nfl_teams(id, abbr, primary_color, is_eliminated, eliminated_round)')
         .in('id', ids),
       supabase.from('game_player_scores')
         .select('player_id, points, games!inner(playoff_round, game_date, kickoff_time)')
@@ -64,7 +77,8 @@ async function computeLeagueStandings(leagueId) {
       position: p.position,
       team: p.nfl_teams?.abbr || null,
       color: p.nfl_teams?.primary_color || null,
-      eliminated: !!p.nfl_teams?.is_eliminated,
+      eliminatedRound: elim.get(p.nfl_teams?.id) || (p.nfl_teams?.is_eliminated ? (p.nfl_teams.eliminated_round || 'Out') : null),
+      eliminated: elim.has(p.nfl_teams?.id) || !!p.nfl_teams?.is_eliminated,
       out: p.injury_status === 'out',
       scores: Object.fromEntries(Object.entries(scores).map(([k, v]) => [k, r2(v)])),
       total: r2(Object.values(scores).reduce((a, b) => a + b, 0)),

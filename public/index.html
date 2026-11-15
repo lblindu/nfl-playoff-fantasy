@@ -148,7 +148,11 @@
     .rg th { font-size: 10px; color: var(--text-3); font-weight: 600; text-align: right; padding: 4px 6px; }
     .rg td { padding: 4px 6px; border-top: 1px solid var(--border); text-align: right; font-family: var(--font-mono); }
     .rg th.l, .rg td.l { text-align: left; font-family: inherit; }
-    .rg tr.dead td.l { opacity: .45; text-decoration: line-through; }
+    .rg tr.dead td { opacity: .5; }
+    .rg tr.dead .nm { text-decoration: line-through; }
+    .rg tr.dead { background: repeating-linear-gradient(135deg, transparent 0 6px, rgba(255,255,255,.03) 6px 12px); }
+    .tm-badge { display: inline-block; min-width: 34px; text-align: center; font-size: 10px; font-weight: 700; padding: 1px 5px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-raised); }
+    .done-tag { font-size: 9px; font-weight: 700; color: var(--red); border: 1px solid var(--red); border-radius: 4px; padding: 0 4px; white-space: nowrap; }
     .rg tfoot td { font-weight: 700; border-top: 2px solid var(--border); }
     .rg .z { color: var(--text-3); }
 
@@ -633,9 +637,10 @@
         <tbody>
           ${m.roster.map(s => `
             <tr class="${s.eliminated ? 'dead' : ''}">
-              <td class="l"><span class="${posClass(s.position)}">${s.position}</span> ${esc(s.name)}
-                <span style="color:var(--text-3);font-size:10px;">${esc(s.team || '')}</span>
-                ${s.out ? '<span style="font-size:9px;font-weight:700;color:var(--red);">OUT</span>' : ''}
+              <td class="l"><span class="tm-badge" style="border-color:${s.color || 'var(--border)'};">${esc(s.team || '—')}</span> <span class="nm">${esc(s.name)}</span>
+                <span style="color:var(--text-3);font-size:10px;">${esc(s.position)}</span>
+                ${s.eliminated ? `<span class="done-tag">OUT · ${esc(({ Wildcard: 'WC', Divisional: 'DIV', Conference: 'CONF', Superbowl: 'SB' })[s.eliminatedRound] || s.eliminatedRound || '')}</span>` : ''}
+                ${s.out ? '<span style="font-size:9px;font-weight:700;color:var(--red);">INJ</span>' : ''}
                 ${s.replaced.map(x => `<div style="font-size:10px;color:var(--text-3);">↳ replaced ${esc(x.name)} (kept ${fmt(x.total)})</div>`).join('')}</td>
               ${rounds.map(r => cell(s.scores[r])).join('')}
               <td style="font-weight:700;">${fmt(s.total)}</td>
@@ -661,7 +666,7 @@
             ${rosterTable(m, rounds)}
           </div>`).join('')}
       </div>
-      <p style="font-size:11px;color:var(--text-3);margin-top:10px;">Struck-through players' teams are eliminated. Replaced players keep the points they earned.</p>
+      <p style="font-size:11px;color:var(--text-3);margin-top:10px;">Struck-through players' teams are eliminated (tag shows the round they went out). Replaced players keep the points they earned.</p>
     `;
   }
 
