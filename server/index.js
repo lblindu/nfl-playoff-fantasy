@@ -38,6 +38,8 @@ app.use('/api/leagues', require('./routes/leagues'));
 app.use('/api/draft', require('./routes/draft'));
 app.use('/api/players', require('./routes/players'));
 app.use('/api/scores', require('./routes/scores'));
+app.use('/api/live', require('./routes/live'));
+app.use('/api/home', require('./routes/home'));
 
 // ── Public config (anon key is safe to expose) ──
 app.get('/api/config', (req, res) => {

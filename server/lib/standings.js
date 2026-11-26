@@ -76,6 +76,7 @@ async function computeLeagueStandings(leagueId) {
       name: p.name,
       position: p.position,
       team: p.nfl_teams?.abbr || null,
+      teamId: p.nfl_teams?.id || null,
       color: p.nfl_teams?.primary_color || null,
       eliminatedRound: elim.get(p.nfl_teams?.id) || (p.nfl_teams?.is_eliminated ? (p.nfl_teams.eliminated_round || 'Out') : null),
       eliminated: elim.has(p.nfl_teams?.id) || !!p.nfl_teams?.is_eliminated,

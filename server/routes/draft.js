@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../lib/supabase');
 const { leagueAccess } = require('../lib/access');
-const { attemptPick, memberOnClock, deadlineFrom } = require('../lib/draftEngine');
+const { attemptPick, memberOnClock, deadlineFrom, draftWindowError } = require('../lib/draftEngine');
 
 // GET /api/draft/:leagueId — full draft state
 router.get('/:leagueId', async (req, res) => {
@@ -57,6 +57,11 @@ router.post('/:leagueId/pick', async (req, res) => {
   const access = await leagueAccess(req, leagueId);
   if (!access.league) return res.status(404).json({ error: 'League not found' });
 
+  if (!req.isAdmin) {
+    const closed = await draftWindowError(access.league.season);
+    if (closed) return res.status(403).json({ error: closed });
+  }
+
   const [{ data: members }, { count }, { data: league }] = await Promise.all([
     supabase.from('league_members').select('id, draft_order, user_id').eq('league_id', leagueId),
     supabase.from('draft_picks').select('id', { count: 'exact', head: true }).eq('league_id', leagueId),
@@ -85,6 +90,10 @@ router.post('/:leagueId/clock', async (req, res) => {
   if (access.league.status !== 'drafting') return res.status(400).json({ error: 'The league is not drafting' });
 
   const action = req.body.action;
+  if (action === 'start' && !req.isAdmin) {
+    const closed = await draftWindowError(access.league.season);
+    if (closed) return res.status(403).json({ error: closed });
+  }
   if (!['start', 'pause'].includes(action)) return res.status(400).json({ error: 'action must be start or pause' });
   const { data: league } = await supabase.from('leagues').select('pick_seconds').eq('id', req.params.leagueId).single();
   const pick_deadline = action === 'start' ? deadlineFrom(league.pick_seconds || 60) : null;

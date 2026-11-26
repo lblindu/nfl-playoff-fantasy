@@ -1,9 +1,24 @@
 const supabase = require('./supabase');
+const { gameTime } = require('./rosters');
 
 const ROSTER_SIZE = 14;
 const PICK_SECONDS = [30, 60, 90];
 
 const deadlineFrom = secs => new Date(Date.now() + secs * 1000).toISOString();
+
+// Drafts open once the playoff field is set (regular season over) and close at the first playoff kickoff.
+// Returns an error message when drafting isn't allowed right now, otherwise null.
+async function draftWindowError(season) {
+  const { data } = await supabase.from('games').select('game_date, kickoff_time, home_team_id, away_team_id').eq('season', season);
+  const games = data || [];
+  if (!games.some(g => g.home_team_id && g.away_team_id)) {
+    return 'Drafts open when the regular season ends and the playoff teams are set.';
+  }
+  if (games.some(g => gameTime(g) <= Date.now())) {
+    return 'The playoffs have started, so drafting is closed.';
+  }
+  return null;
+}
 
 // Snake order: who is on the clock for the next pick (pickCount = picks made so far)
 function memberOnClock(members, pickCount) {
@@ -133,4 +148,4 @@ function startDraftClock() {
   setInterval(tick, 2000);
 }
 
-module.exports = { attemptPick, memberOnClock, startDraftClock, deadlineFrom, PICK_SECONDS, ROSTER_SIZE };
+module.exports = { draftWindowError, attemptPick, memberOnClock, startDraftClock, deadlineFrom, PICK_SECONDS, ROSTER_SIZE };

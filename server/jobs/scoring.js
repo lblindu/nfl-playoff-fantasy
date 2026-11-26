@@ -1,46 +1,52 @@
 const cron = require('node-cron');
 const supabase = require('../lib/supabase');
-const { getGamePlayerStats, parseGroupedStats, computePoints } = require('../lib/apiSports');
+const { getGamePlayerStats, parseGroupedStats, computePoints, getGame } = require('../lib/apiSports');
+const { getLive } = require('../lib/live');
 const { buildChain, activePlayerAt, gameTime } = require('../lib/rosters');
 
 const ROUNDS = ['Wildcard', 'Divisional', 'Conference', 'Superbowl'];
 
-// Run every minute during game windows (Sat 4:30-midnight, Sun 1pm-midnight, Mon 8pm-11:30pm ET)
-function isWithinGameWindow() {
-  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  const dow = now.getDay(); // 0=Sun, 1=Mon, 6=Sat
-  const mins = now.getHours() * 60 + now.getMinutes();
+const DONE = ['FT', 'AOT', 'CANC', 'PST', 'ABD'];
 
-  if (dow === 6) return mins >= 16 * 60 + 30;             // Sat 4:30pm+
-  if (dow === 0) return mins >= 13 * 60;                   // Sun 1pm+
-  if (dow === 1) return mins >= 20 * 60 && mins <= 23 * 60 + 30; // Mon 8-11:30pm
-  return false;
-}
-
+// Every minute: pull live games, sync status/score and player stats for the ones we track.
+// (The Live page reads the same shared snapshot, so users never trigger extra API calls.)
 async function refreshLiveScores() {
-  if (!isWithinGameWindow()) return;
-
   try {
-    // Get games that are live (not NS, not FT)
-    const { data: games, error } = await supabase
+    const live = await getLive({ maxAgeMs: 0 });
+    const liveIds = new Set(live.games.map(g => String(g.apiGameId)));
+
+    const { data: tracked } = await supabase
       .from('games')
-      .select('id, api_game_id, playoff_round')
-      .not('status', 'in', '("NS","FT","TBD")')
+      .select('id, api_game_id, playoff_round, status')
       .not('status', 'is', null);
 
-    if (error || !games?.length) return;
-
-    for (const game of games) {
-      await refreshGameStats(game);
+    for (const game of tracked || []) {
+      const lg = live.games.find(g => String(g.apiGameId) === String(game.api_game_id));
+      if (lg) {
+        await supabase.from('games').update({
+          status: lg.status.short, home_score: lg.home.score, away_score: lg.away.score,
+          last_synced_at: new Date().toISOString(),
+        }).eq('id', game.id);
+        await refreshGameStats(game, lg.raw);
+      } else if (!liveIds.has(String(game.api_game_id)) && !['NS', 'TBD', ...DONE].includes(game.status)) {
+        // Was in progress, no longer live: fetch the final result once
+        const fin = await getGame(game.api_game_id);
+        if (!fin) continue;
+        await supabase.from('games').update({
+          status: fin.status, home_score: fin.homeScore, away_score: fin.awayScore,
+          last_synced_at: new Date().toISOString(),
+        }).eq('id', game.id);
+        await refreshGameStats(game);
+      }
     }
   } catch (e) {
     console.error('[scoring] refreshLiveScores error:', e.message);
   }
 }
 
-async function refreshGameStats(game) {
+async function refreshGameStats(game, prefetched) {
   try {
-    const responseArr = await getGamePlayerStats(game.api_game_id);
+    const responseArr = prefetched || await getGamePlayerStats(game.api_game_id);
     if (!responseArr.length) return;
 
     const isGrouped = !!responseArr[0]?.groups;

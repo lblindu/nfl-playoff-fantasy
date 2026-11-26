@@ -128,6 +128,23 @@
     }
     .standings-row:hover { background: var(--bg-raised); }
     .standings-row.header { font-size: 11px; font-weight: 600; color: var(--text-3); padding: 6px 1rem; }
+    .x3 { font-size: 12px; color: var(--text-3); }
+    .me { color: var(--gold); font-weight: 600; }
+    .home-action { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border: 1px solid var(--gold-border); background: var(--gold-dim); border-radius: var(--radius-lg); margin-bottom: 12px; font-size: 13px; }
+    .home-action.warn { border-color: var(--red); background: rgba(239,68,68,.08); }
+    .home-stats { display: flex; gap: 18px; margin: 12px 0 10px; }
+    .home-stats > div { flex: 1; min-width: 0; }
+    .home-stats b { display: block; font-size: 24px; font-weight: 600; line-height: 1.2; }
+    .home-stats small { font-size: 12px; color: var(--text-3); font-weight: 400; }
+    .home-bar { height: 6px; border-radius: 3px; background: var(--bg-raised); overflow: hidden; }
+    .home-bar i { display: block; height: 100%; background: var(--gold); }
+    .home-tag { font-size: 11px; padding: 2px 8px; border-radius: 99px; background: var(--bg-raised); color: var(--text-2); font-family: var(--font-mono); }
+    .home-lb { display: grid; grid-template-columns: 20px 1fr auto; gap: 4px 8px; font-size: 13px; }
+    .live-score { display: flex; align-items: center; justify-content: space-around; text-align: center; margin: 14px 0 4px; }
+    .live-score img { height: 44px; margin-bottom: 4px; }
+    .live-score .n { font-size: 38px; font-weight: 700; font-family: var(--font-mono); line-height: 1.1; }
+    .live-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+    .live-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 0; font-size: 13px; }
     .round-score { text-align: right; min-width: 44px; font-family: var(--font-mono); font-size: 12px; }
 
     .st-wrap { overflow-x: auto; }
@@ -200,6 +217,7 @@
   // ── Routes ──
   route('/login', renderLogin);
   route('/',      renderHome);
+  route('/live',  renderLive);
   route('/join/:code', renderJoin);
   route('/league/:id', renderLeague);
   route('/league/:id/draft', renderDraftRoom);
@@ -309,6 +327,14 @@
   }
 
   // ── HOME ──
+  const untilText = iso => {
+    const ms = Date.parse(iso) - Date.now();
+    if (ms <= 0) return 'now';
+    const m = Math.floor(ms / 60000), d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60);
+    return d ? `${d}d ${h}h` : h ? `${h}h ${m % 60}m` : `${m}m`;
+  };
+  const whenText = iso => new Date(iso).toLocaleString(undefined, { weekday: 'long', hour: 'numeric', minute: '2-digit' });
+
   async function renderHome() {
     if (!getSession()) return navigate('/login');
     destroyDraft();
@@ -318,30 +344,84 @@
     if (pendingJoin) return navigate(`/join/${pendingJoin}`);
     maybeAskTheme();
 
+    const first = (getMe()?.email || getSession().user.email || '').split('@')[0].split('+')[0];
     document.getElementById('app').innerHTML = `
       ${navbar()}
       <div class="hero">
         <div class="page hero-inner">
           <div>
-            <h1>Your Leagues</h1>
-            <p style="color:var(--text-2);margin-top:4px;">NFL Playoffs</p>
+            <h1>Welcome back, ${esc(first)}</h1>
+            <p id="home-sub" style="color:var(--text-2);margin-top:4px;">NFL Playoffs</p>
           </div>
           <button class="btn btn-primary" id="create-league-btn">+ New League</button>
         </div>
       </div>
       <div class="page">
-        <div id="leagues-container"><div class="skeleton" style="height:120px;border-radius:var(--radius-lg);"></div></div>
+        <div id="home-actions"></div>
+        <div id="leagues-container"><div class="skeleton" style="height:160px;border-radius:var(--radius-lg);"></div></div>
       </div>
     `;
-
     document.getElementById('create-league-btn').addEventListener('click', () => showCreateLeagueModal());
 
     try {
-      const leagues = await api('GET', '/leagues');
-      renderLeagueGrid(leagues);
+      const home = await api('GET', '/home');
+      if (location.pathname !== '/') return;
+      const sub = document.getElementById('home-sub');
+      if (sub && home.next) sub.textContent = `${home.next.round} round kicks off ${whenText(home.next.kickoff)} (in ${untilText(home.next.kickoff)})`;
+      renderHomeActions(home.actions);
+      renderLeagueGrid(home.leagues);
     } catch (e) {
       toast(e.message, 'error');
     }
+  }
+
+  function renderHomeActions(actions) {
+    const el = document.getElementById('home-actions');
+    if (!el || !actions?.length) return;
+    el.innerHTML = actions.map(a => a.type === 'pick'
+      ? `<div class="home-action"><div><b>It's your pick</b><div class="x3">${esc(a.leagueName)} · you're on the clock</div></div><a href="/league/${a.leagueId}/draft" data-link class="btn btn-primary btn-sm">Enter draft room</a></div>`
+      : `<div class="home-action warn"><div><b>${esc(a.player)} (${esc(a.team)}) is ruled out</b><div class="x3">${esc(a.leagueName)} · swap him before kickoff in ${untilText(a.kickoff)}</div></div><a href="/league/${a.leagueId}" data-link class="btn btn-primary btn-sm" onclick="sessionStorage.setItem('openTab','roster')">Replace player</a></div>`
+    ).join('');
+  }
+
+  const medalOf = r => r === 1 ? '🥇' : r === 2 ? '🥈' : r === 3 ? '🥉' : r;
+
+  function leagueCardBody(l) {
+    if (l.status === 'setup') {
+      const need = Math.max(0, 7 - l.memberCount);
+      return `
+        <div class="x3" style="margin:10px 0;">${l.memberCount} of 7 players have joined${need ? ` · ${need} more needed` : ' · ready to draft'}</div>
+        ${l.isCommissioner && l.inviteCode ? `<button class="btn btn-ghost btn-sm" data-copy-invite="${l.inviteCode}">Copy invite link</button>` : ''}`;
+    }
+    if (l.status === 'drafting' && l.draft) {
+      const d = l.draft;
+      return `
+        <div style="margin:10px 0 6px;font-size:18px;font-weight:600;">${d.myTurn ? "You're on the clock" : 'Draft in progress'}</div>
+        <div class="x3">Pick ${d.picksMade + 1} of ${d.total}${d.myTurn ? '' : d.upIn != null ? ` · you're up in ${d.upIn} pick${d.upIn === 1 ? '' : 's'}` : ''}</div>
+        <div class="x3" style="margin-top:2px;">${d.clockRunning ? `${d.pickSeconds}s per pick` : 'Waiting for the commissioner to start the clock'}</div>
+        <a href="/league/${l.id}/draft" data-link class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="event.stopPropagation()">Enter draft room</a>`;
+    }
+    if (!l.me) {
+      return l.top?.length ? `<div class="x3" style="margin-top:10px;">Leader: ${esc(l.leaderName)} · ${fmt(l.leaderTotal)}</div>` : '';
+    }
+    const m = l.me;
+    const rounds = ['Wildcard', 'Divisional', 'Conference', 'Superbowl'];
+    return `
+      <div class="home-stats">
+        <div><span class="x3">Rank</span><b>${medalOf(m.rank)}<small> of ${l.size}</small></b></div>
+        <div><span class="x3">Points</span><b>${fmt(m.total)}</b></div>
+        <div><span class="x3">${m.rank === 1 ? 'Lead' : 'Behind 1st'}</span><b style="color:${m.rank === 1 ? 'var(--green)' : 'var(--red)'};">${m.rank === 1 ? '🏆' : '−' + fmt(m.behind)}</b></div>
+      </div>
+      <div class="x3" style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>Players still alive</span><span>${m.alive} of ${m.rosterSize || 14}</span></div>
+      <div class="home-bar"><i style="width:${Math.round(100 * m.alive / (m.rosterSize || 14))}%"></i></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0;">
+        ${rounds.filter(r => l.started?.includes(r)).map(r => `<span class="home-tag">${r === 'Superbowl' ? 'SB' : r.slice(0, 3)} ${fmt(m.byRound[r])} (#${m.roundRank[r]})</span>`).join('')}
+      </div>
+      <div class="home-lb">
+        ${l.top.map(t => `<span>${t.rank}</span><span class="${t.isMe ? 'me' : ''}">${esc(t.name)}${t.isMe ? ' (you)' : ''}</span><span class="${t.isMe ? 'me' : ''}">${fmt(t.total)}</span>`).join('')}
+        ${m.rank > 3 ? `<span>${m.rank}</span><span class="me">You</span><span class="me">${fmt(m.total)}</span>` : ''}
+      </div>
+      ${m.bestPlayer ? `<div class="x3" style="margin-top:10px;">Your top player: ${esc(m.bestPlayer.name)} · ${fmt(m.bestPlayer.total)}</div>` : ''}`;
   }
 
   function renderLeagueGrid(leagues) {
@@ -354,19 +434,103 @@
     el.innerHTML = `<div class="league-grid">${leagues.map(l => `
       <div class="card card-hover league-card" data-link onclick="app.navigate('/league/${l.id}')">
         <div class="flex items-center justify-between">
-          <h3>${l.name}</h3>
+          <h3>${esc(l.name)}</h3>
           ${statusPill(l.status)}
         </div>
-        <div class="league-meta">
-          <span>📅 ${l.season} Season</span>
-          <span>👥 ${l.league_members?.[0]?.count ?? 0} members</span>
+        <div class="x3">${l.season} season${l.isCommissioner ? ' · you run this league' : ''}</div>
+        ${leagueCardBody(l)}
+        <div class="league-card-footer"><span class="label">Open league →</span></div>
+      </div>`).join('')}</div>`;
+    el.querySelectorAll('[data-copy-invite]').forEach(b => b.addEventListener('click', e => {
+      e.stopPropagation();
+      navigator.clipboard?.writeText(`${location.origin}/join/${b.dataset.copyInvite}`);
+      toast('Invite link copied', 'success');
+    }));
+  }
+
+  // ── LIVE ──
+  let liveTimer = null;
+  let liveSelected = null;
+
+  async function renderLive() {
+    if (!getSession()) return navigate('/login');
+    destroyDraft();
+    clearInterval(liveTimer);
+    document.getElementById('app').innerHTML = `
+      ${navbar()}
+      <div class="page" style="padding-top:1.5rem;">
+        <div class="flex items-center justify-between mb-2"><h2>Live</h2><span class="x3" id="live-updated"></span></div>
+        <div id="live-body"><div class="skeleton" style="height:160px;border-radius:var(--radius-lg);"></div></div>
+      </div>`;
+    await loadLive();
+    liveTimer = setInterval(() => {
+      if (location.pathname !== '/live') { clearInterval(liveTimer); return; }
+      loadLive();
+    }, 15000);
+  }
+
+  async function loadLive() {
+    try {
+      const data = await api('GET', '/live');
+      if (location.pathname !== '/live') return;
+      paintLive(data);
+    } catch (e) {
+      const body = document.getElementById('live-body');
+      if (body && !body.querySelector('.live-game')) body.innerHTML = `<div class="empty-state"><p>${esc(e.message)}</p></div>`;
+    }
+  }
+
+  function paintLive(data) {
+    const body = document.getElementById('live-body');
+    if (!body) return;
+    document.getElementById('live-updated').textContent = `Updated ${new Date(data.serverTime).toLocaleTimeString()}`;
+
+    if (!data.games.length) {
+      body.innerHTML = `<div class="card" style="text-align:center;padding:2rem 1rem;">
+        <div style="font-size:36px;">🏈</div>
+        <h3 style="margin:8px 0 4px;">No game is live right now</h3>
+        ${data.next ? `<p class="x3">Next up: ${data.next.away ? esc(data.next.away) + ' at ' + esc(data.next.home) + ' · ' : ''}${esc(data.next.round)} round, ${whenText(data.next.kickoff)} (in ${untilText(data.next.kickoff)})</p>` : '<p class="x3">The next kickoff will show up here.</p>'}
+      </div>`;
+      return;
+    }
+
+    if (!data.games.some(g => g.id === liveSelected)) liveSelected = data.games[0].id;
+    const g = data.games.find(x => x.id === liveSelected);
+    const yours = g.leagues.flatMap(l => l.members.filter(m => m.isMe).map(m => ({ league: l.name, ...m })));
+
+    body.innerHTML = `
+      ${data.games.length > 1 ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">${data.games.map(x => `<button class="btn btn-sm ${x.id === g.id ? 'btn-primary' : 'btn-ghost'}" data-live-game="${x.id}">${esc(x.away.name)} @ ${esc(x.home.name)}</button>`).join('')}</div>` : ''}
+      <div class="card live-game" style="margin-bottom:12px;">
+        <div class="flex items-center justify-between">
+          <span class="pill pill-live"><span class="pill-dot pulse"></span>LIVE · ${esc(g.status.long || g.status.short)}${g.status.timer ? ' ' + esc(g.status.timer) : ''}</span>
+          <span class="x3">${esc(g.stage)} ${esc(g.week)}</span>
         </div>
-        <div class="league-card-footer">
-          <span class="label">View league →</span>
-          ${l.status === 'drafting' ? '<span class="pill pill-live"><span class="pill-dot pulse"></span>Draft Live</span>' : ''}
+        <div class="live-score">
+          <div><img src="${esc(g.away.logo || '')}" alt="" onerror="this.style.display='none'"><div class="x3">${esc(g.away.name)}</div><div class="n">${g.away.score}</div></div>
+          <div class="x3">at</div>
+          <div><img src="${esc(g.home.logo || '')}" alt="" onerror="this.style.display='none'"><div class="x3">${esc(g.home.name)}</div><div class="n">${g.home.score}</div></div>
         </div>
       </div>
-    `).join('')}</div>`;
+      <div class="live-cols">
+        <div class="card">
+          <h3 style="margin-bottom:2px;">Your fantasy points right now</h3>
+          <div class="x3" style="margin-bottom:8px;">Running totals from this game (final when the game ends)</div>
+          ${yours.length ? yours.map(y => `
+            <div style="margin-bottom:10px;"><div class="x3" style="margin-bottom:4px;">${esc(y.league)}</div>
+              ${y.players.map(p => `<div class="live-row"><span><span class="${posClass(p.position)}">${p.position}</span> ${esc(p.name)}</span><b>${fmt(p.points)}</b></div>`).join('')}
+              <div class="live-row" style="border-top:1px solid var(--border);"><span class="x3">Total this game</span><b style="color:var(--gold);">${fmt(y.total)}</b></div>
+            </div>`).join('') : '<div class="x3">None of your players are in this game.</div>'}
+        </div>
+        <div class="card">
+          <h3 style="margin-bottom:8px;">Game leaders</h3>
+          ${g.leaders.length ? g.leaders.map(p => `<div class="live-row"><span>${esc(p.name)} <span class="x3">${esc(p.team)}</span>${p.mine ? ' <span style="color:var(--gold);font-size:10px;">YOURS</span>' : ''}</span><b>${fmt(p.points)}</b></div>`).join('') : '<div class="x3">Stats appear once play gets going.</div>'}
+        </div>
+      </div>
+      ${g.leagues.length ? `<div class="card" style="margin-top:12px;"><h3 style="margin-bottom:8px;">League impact</h3>
+        ${g.leagues.map(l => `<div style="margin-bottom:10px;"><div class="x3" style="margin-bottom:4px;">${esc(l.name)}</div>
+          ${l.members.map(m => `<div class="live-row"><span class="${m.isMe ? 'me' : ''}">${esc(m.name)}${m.isMe ? ' (you)' : ''} <span class="x3">${m.players.length} player${m.players.length === 1 ? '' : 's'} here</span></span><b>${fmt(m.total)}</b></div>`).join('')}</div>`).join('')}
+      </div>` : ''}`;
+    body.querySelectorAll('[data-live-game]').forEach(b => b.addEventListener('click', () => { liveSelected = b.dataset.liveGame; paintLive(data); }));
   }
 
   function showCreateLeagueModal() {
@@ -475,11 +639,13 @@
   // ── LEAGUE DETAIL ──
   let currentLeagueId = null;
   let activeTab = 'standings';
+  const takeOpenTab = () => { const t = sessionStorage.getItem('openTab'); sessionStorage.removeItem('openTab'); return t; };
 
   async function renderLeague({ id }) {
     if (!getSession()) return navigate('/login');
     destroyDraft();
     currentLeagueId = id;
+    { const t = takeOpenTab(); if (t) activeTab = t; }
 
     document.getElementById('app').innerHTML = `
       ${navbar()}
@@ -1242,6 +1408,7 @@
           <span class="navbar-title">Playoff <span>Fantasy</span></span>
         </a>
         <div class="navbar-right">
+          <a href="/live" data-link class="nav-link">Live</a>
           <a href="/admin" data-link class="nav-link" id="nav-admin-link" style="display:${isAdmin() ? 'inline-flex' : 'none'};">Admin</a>
           <span class="nav-link" id="nav-user">${getMe()?.email?.split('@')[0] || ''}</span>
           <button class="btn btn-ghost btn-sm" onclick="app.openTheme()" title="Theme">🎨</button>

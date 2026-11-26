@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { findNextGame } = require('../lib/rosters');
 const { leagueAccess } = require('../lib/access');
 const { recalcMemberScores } = require('../jobs/scoring');
+const { draftWindowError } = require('../lib/draftEngine');
 
 // 14 playoff teams → 7 players per league, always
 const LEAGUE_SIZE = 7;
@@ -192,6 +193,10 @@ router.patch('/:id', async (req, res) => {
 
   // A real league needs exactly 7 members to draft; admins can force it for testing
   if (updates.status === 'drafting') {
+    if (!req.isAdmin) {
+      const closed = await draftWindowError(access.league.season);
+      if (closed) return res.status(400).json({ error: closed });
+    }
     const count = await memberCount(req.params.id);
     if (count !== LEAGUE_SIZE && !(req.isAdmin && req.body.force)) {
       return res.status(400).json({ error: `A league needs exactly ${LEAGUE_SIZE} members to start the draft (has ${count}).` });

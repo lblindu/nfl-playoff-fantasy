@@ -109,7 +109,7 @@ function parseGroupedStats(responseArr) {
         if (!pid) continue;
 
         if (!acc.has(pid)) {
-          acc.set(pid, { id: pid, name: pname, passYds: 0, passTD: 0, int: 0, rushYds: 0, rushTD: 0, rec: 0, recYds: 0, recTD: 0, fumbles: 0, fumblesLost: false, twoPt: 0 });
+          acc.set(pid, { id: pid, name: pname, team: teamBlock.team?.name || '', passYds: 0, passTD: 0, int: 0, rushYds: 0, rushTD: 0, rec: 0, recYds: 0, recTD: 0, fumbles: 0, fumblesLost: false, twoPt: 0 });
         }
         const row = acc.get(pid);
 
@@ -163,6 +163,14 @@ function computePoints(statLine) {
   return Math.round(pts * 100) / 100;
 }
 
+// One game's current status and score (used to settle a game after it leaves the live feed)
+async function getGame(gameId) {
+  const data = await call('/games', { id: gameId });
+  const g = (data.response || [])[0];
+  if (!g) return null;
+  return { status: String(g.game?.status?.short || ''), homeScore: g.scores?.home?.total ?? null, awayScore: g.scores?.away?.total ?? null };
+}
+
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-module.exports = { call, getPlayoffTeams, getTeamPlayers, getPostseasonGames, getGamePlayerStats, parseGroupedStats, computePoints, NFL_LEAGUE_ID };
+module.exports = { getGame, call, getPlayoffTeams, getTeamPlayers, getPostseasonGames, getGamePlayerStats, parseGroupedStats, computePoints, NFL_LEAGUE_ID };
