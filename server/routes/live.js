@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../lib/supabase');
 const { getLive } = require('../lib/live');
+const { call, NFL_LEAGUE_ID } = require('../lib/apiSports');
 const { buildChain, activePlayerAt, gameTime } = require('../lib/rosters');
 
 const r1 = n => Math.round(n * 10) / 10;
@@ -73,6 +74,38 @@ router.get('/', async (req, res) => {
   });
 
   res.json({ serverTime: new Date().toISOString(), games, next });
+});
+
+// GET /api/schedule — upcoming games and recent results (one cached API call serves everyone)
+const sched = { at: 0, games: [] };
+router.get('/schedule', async (req, res) => {
+  if (!req.userId) return res.status(401).json({ error: 'Not authenticated' });
+  try {
+    if (Date.now() - sched.at > 10 * 60 * 1000) {
+      const season = parseInt(process.env.CURRENT_SEASON || '2026');
+      const data = await call('/games', { league: NFL_LEAGUE_ID, season });
+      sched.games = (data.response || []).map(x => ({
+        id: String(x.game?.id), stage: x.game?.stage || '', week: x.game?.week || '',
+        kickoff: x.game?.date?.timestamp ? new Date(x.game.date.timestamp * 1000).toISOString() : null,
+        status: x.game?.status?.short || '',
+        home: { name: x.teams?.home?.name || null, logo: x.teams?.home?.logo || null, score: x.scores?.home?.total ?? null },
+        away: { name: x.teams?.away?.name || null, logo: x.teams?.away?.logo || null, score: x.scores?.away?.total ?? null },
+      })).filter(g => g.kickoff && g.stage !== 'Pre Season');
+      sched.at = Date.now();
+    }
+  } catch (e) {
+    if (!sched.at) return res.status(502).json({ error: 'Schedule is unavailable right now' });
+  }
+  const now = Date.now();
+  const upcoming = sched.games
+    .filter(g => ['NS', 'TBD'].includes(g.status) && Date.parse(g.kickoff) > now)
+    .sort((a, b) => Date.parse(a.kickoff) - Date.parse(b.kickoff))
+    .slice(0, 8);
+  const recent = sched.games
+    .filter(g => ['FT', 'AOT'].includes(g.status))
+    .sort((a, b) => Date.parse(b.kickoff) - Date.parse(a.kickoff))
+    .slice(0, 6);
+  res.json({ upcoming, recent });
 });
 
 // Next scheduled playoff game (for the "nothing live" state)

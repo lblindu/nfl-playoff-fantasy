@@ -128,6 +128,11 @@
     }
     .standings-row:hover { background: var(--bg-raised); }
     .standings-row.header { font-size: 11px; font-weight: 600; color: var(--text-3); padding: 6px 1rem; }
+    .nfl-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 18px; }
+    .nfl-h { font-size: 11px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+    .sched-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); font-size: 13px; }
+    .live-mini { display: block; padding: 10px 12px; border: 1px solid var(--gold-border); background: var(--gold-dim); border-radius: var(--radius); margin-bottom: 8px; color: inherit; text-decoration: none; font-size: 13px; }
+    .mono { font-family: var(--font-mono); }
     .x3 { font-size: 12px; color: var(--text-3); }
     .me { color: var(--gold); font-weight: 600; }
     .home-action { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border: 1px solid var(--gold-border); background: var(--gold-dim); border-radius: var(--radius-lg); margin-bottom: 12px; font-size: 13px; }
@@ -335,6 +340,57 @@
   };
   const whenText = iso => new Date(iso).toLocaleString(undefined, { weekday: 'long', hour: 'numeric', minute: '2-digit' });
 
+  const kickText = iso => new Date(iso).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const gameRow = (g, showScore) => {
+    const t = (x, bold) => `<span style="display:inline-flex;align-items:center;gap:6px;${bold ? 'font-weight:600;' : ''}"><img src="${esc(x.logo || '')}" alt="" style="height:18px;width:18px;object-fit:contain;" onerror="this.style.display='none'">${esc(x.name || 'TBD')}</span>`;
+    const post = /post|wild|divis|conf|super/i.test(g.stage);
+    const aWin = showScore && g.away.score > g.home.score, hWin = showScore && g.home.score > g.away.score;
+    return `<div class="sched-row">
+      <div style="min-width:0;display:flex;flex-direction:column;gap:3px;">${t(g.away, aWin)}${t(g.home, hWin)}</div>
+      <div style="text-align:right;white-space:nowrap;">
+        ${showScore ? `<div style="font-family:var(--font-mono);font-size:13px;line-height:1.55;"><span style="${aWin ? 'font-weight:700;' : ''}">${g.away.score}</span><br><span style="${hWin ? 'font-weight:700;' : ''}">${g.home.score}</span></div>`
+          : `<div style="font-size:12px;">${kickText(g.kickoff)}</div><div class="x3">in ${untilText(g.kickoff)}</div>`}
+        <div class="x3">${post ? '<b style="color:var(--gold);">PLAYOFFS</b> · ' : ''}${esc(g.week || g.stage)}</div>
+      </div></div>`;
+  };
+
+  // "NFL Playoffs" panel under the greeting: what's live now, what's next, what just finished
+  async function renderNflPanel() {
+    const el = document.getElementById('nfl-panel');
+    if (!el) return;
+    const [live, sched] = await Promise.all([api('GET', '/live').catch(() => null), api('GET', '/live/schedule').catch(() => null)]);
+    if (location.pathname !== '/' || !document.getElementById('nfl-panel')) return;
+    if (!live && !sched) { el.innerHTML = ''; return; }
+
+    const liveGames = live?.games || [];
+    const liveHtml = liveGames.length ? `
+      <div>
+        <div class="nfl-h"><span class="pill pill-live"><span class="pill-dot pulse"></span>Live now</span></div>
+        ${liveGames.map(g => {
+          const mine = g.leagues.flatMap(l => l.members.filter(m => m.isMe));
+          const pts = mine.reduce((a, m) => a + m.total, 0), n = mine.reduce((a, m) => a + m.players.length, 0);
+          return `<a href="/live" data-link class="live-mini">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <span>${esc(g.away.name)} <b class="mono">${g.away.score}</b></span>
+              <span class="x3">${esc(g.status.long || g.status.short)}${g.status.timer ? ' ' + esc(g.status.timer) : ''}</span>
+              <span><b class="mono">${g.home.score}</b> ${esc(g.home.name)}</span>
+            </div>
+            <div class="x3" style="margin-top:6px;">${n ? `Your ${n} player${n === 1 ? '' : 's'} here: <b style="color:var(--gold);">${fmt(pts)} pts</b>` : 'None of your players are in this game'} · open live view →</div>
+          </a>`;
+        }).join('')}
+      </div>` : '';
+
+    const up = sched?.upcoming || [];
+    const upHtml = `<div><div class="nfl-h">Upcoming games</div>${up.length ? up.slice(0, 5).map(g => gameRow(g, false)).join('') : '<div class="x3">No upcoming games on the schedule.</div>'}</div>`;
+    const rec = sched?.recent || [];
+    const recHtml = rec.length ? `<div><div class="nfl-h">Recent results</div>${rec.slice(0, 4).map(g => gameRow(g, true)).join('')}</div>` : '';
+
+    el.innerHTML = `<div class="card nfl-panel">
+      <div class="flex items-center justify-between" style="margin-bottom:10px;"><h3>NFL this week</h3><a href="/live" data-link class="x3" style="color:var(--gold);">Full live view →</a></div>
+      <div class="nfl-cols">${liveHtml}${upHtml}${recHtml}</div>
+    </div>`;
+  }
+
   async function renderHome() {
     if (!getSession()) return navigate('/login');
     destroyDraft();
@@ -357,11 +413,13 @@
         </div>
       </div>
       <div class="page">
+        <div id="nfl-panel" style="margin-bottom:12px;"></div>
         <div id="home-actions"></div>
         <div id="leagues-container"><div class="skeleton" style="height:160px;border-radius:var(--radius-lg);"></div></div>
       </div>
     `;
     document.getElementById('create-league-btn').addEventListener('click', () => showCreateLeagueModal());
+    renderNflPanel();
 
     try {
       const home = await api('GET', '/home');
@@ -461,12 +519,26 @@
       <div class="page" style="padding-top:1.5rem;">
         <div class="flex items-center justify-between mb-2"><h2>Live</h2><span class="x3" id="live-updated"></span></div>
         <div id="live-body"><div class="skeleton" style="height:160px;border-radius:var(--radius-lg);"></div></div>
+        <div id="live-schedule" style="margin-top:12px;"></div>
       </div>`;
+    loadSchedule();
     await loadLive();
     liveTimer = setInterval(() => {
       if (location.pathname !== '/live') { clearInterval(liveTimer); return; }
       loadLive();
     }, 15000);
+  }
+
+  async function loadSchedule() {
+    try {
+      const sched = await api('GET', '/live/schedule');
+      const el = document.getElementById('live-schedule');
+      if (!el || location.pathname !== '/live') return;
+      el.innerHTML = `<div class="live-cols">
+        <div class="card"><h3 style="margin-bottom:8px;">Upcoming schedule</h3>${sched.upcoming.length ? sched.upcoming.map(g => gameRow(g, false)).join('') : '<div class="x3">No upcoming games on the schedule.</div>'}</div>
+        <div class="card"><h3 style="margin-bottom:8px;">Recent results</h3>${sched.recent.length ? sched.recent.map(g => gameRow(g, true)).join('') : '<div class="x3">No results yet.</div>'}</div>
+      </div>`;
+    } catch { /* schedule is optional */ }
   }
 
   async function loadLive() {
