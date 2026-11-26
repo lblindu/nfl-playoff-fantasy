@@ -133,6 +133,20 @@
     .sched-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); font-size: 13px; }
     .live-mini { display: block; padding: 10px 12px; border: 1px solid var(--gold-border); background: var(--gold-dim); border-radius: var(--radius); margin-bottom: 8px; color: inherit; text-decoration: none; font-size: 13px; }
     .mono { font-family: var(--font-mono); }
+    .rules-toc { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+    .rules-toc a { font-size: 12px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 99px; color: var(--text-2); text-decoration: none; }
+    .rules-toc a:hover { border-color: var(--gold-border); color: var(--gold); }
+    .rules-sec { margin-bottom: 12px; scroll-margin-top: 70px; }
+    .rules-sec h2 { font-size: 17px; margin-bottom: 10px; }
+    .rules-sec ul, .rules-sec ol { padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--text-2); line-height: 1.55; }
+    .rules-sec b { color: var(--text); }
+    .rules-note { font-size: 13px; color: var(--text-2); margin-top: 10px; padding: 8px 12px; background: var(--bg-raised); border-radius: var(--radius); }
+    .rules-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .rules-table th { text-align: left; font-size: 11px; color: var(--text-3); padding: 6px 8px; }
+    .rules-table td { padding: 7px 8px; border-top: 1px solid var(--border); color: var(--text-2); }
+    .rules-sec details { border-top: 1px solid var(--border); padding: 10px 0; font-size: 14px; }
+    .rules-sec summary { cursor: pointer; font-weight: 600; color: var(--text); }
+    .rules-sec details p { margin-top: 6px; color: var(--text-2); }
     .x3 { font-size: 12px; color: var(--text-3); }
     .me { color: var(--gold); font-weight: 600; }
     .home-action { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border: 1px solid var(--gold-border); background: var(--gold-dim); border-radius: var(--radius-lg); margin-bottom: 12px; font-size: 13px; }
@@ -223,6 +237,7 @@
   route('/login', renderLogin);
   route('/',      renderHome);
   route('/live',  renderLive);
+  route('/how-to-play', renderRules);
   route('/join/:code', renderJoin);
   route('/league/:id', renderLeague);
   route('/league/:id/draft', renderDraftRoom);
@@ -1471,6 +1486,107 @@
     } catch (e) { toast(e.message, 'error'); }
   }
 
+  // ── HOW TO PLAY ──
+  function renderRules() {
+    destroyDraft();
+    clearInterval(liveTimer);
+    const sec = (id, title, body) => `<section class="card rules-sec" id="${id}"><h2>${title}</h2>${body}</section>`;
+    const pts = [
+      ['Passing yards', '1 point per 25 yards', '0.04 per yard'],
+      ['Passing touchdown', '4 points', ''],
+      ['Interception thrown', '−2 points', ''],
+      ['Rushing yards', '1 point per 10 yards', ''],
+      ['Rushing touchdown', '6 points', ''],
+      ['Reception', '1 point each', 'full PPR'],
+      ['Receiving yards', '1 point per 10 yards', ''],
+      ['Receiving touchdown', '6 points', ''],
+      ['Fumble', '−2 points', ''],
+      ['Two-point conversion', '2 points', ''],
+    ];
+    document.getElementById('app').innerHTML = `
+      ${getSession() ? navbar() : ''}
+      <div class="page rules-page" style="padding-top:1.5rem;max-width:860px;">
+        <h1 style="margin-bottom:4px;">How to play</h1>
+        <p style="color:var(--text-2);margin-bottom:12px;">Draft one player from every NFL playoff team. Your players score points as their teams play through the playoffs, and the highest total at the end wins.</p>
+        <div class="rules-toc">
+          <a href="#overview">The basics</a><a href="#setup">Set up a league</a><a href="#draft">The draft</a>
+          <a href="#scoring">Scoring</a><a href="#injuries">Injury replacements</a><a href="#tracking">Following your league</a><a href="#faq">FAQ</a>
+        </div>
+
+        ${sec('overview', 'The basics', `
+          <ul>
+            <li>A league has <b>exactly 7 players</b>.</li>
+            <li>Each player drafts <b>14 players</b>: exactly one from each of the 14 playoff teams.</li>
+            <li>You can have <b>at most 2 quarterbacks</b>. Every other position (RB, WR, TE) is open, so build the roster however you like.</li>
+            <li>A player can only be drafted once per league. Once he's taken, he's gone for everyone else.</li>
+            <li>Your total is the sum of your players' points across all four rounds: Wild Card, Divisional, Conference Championships and the Super Bowl.</li>
+            <li>Rosters are locked after the draft. The only change allowed is an injury replacement (see below).</li>
+          </ul>`)}
+
+        ${sec('setup', 'Set up a league', `
+          <ol>
+            <li><b>Create the league.</b> On the home page, choose <b>+ New League</b>, name it, and pick the time per pick (30, 60 or 90 seconds).</li>
+            <li><b>Decide if you're playing.</b> The person who creates a league is its commissioner. You can play in it too (then invite 6 friends) or just run it (then invite 7).</li>
+            <li><b>Invite your players.</b> Open the league, go to the <b>Manage</b> tab, and copy the invite link. Send it to your friends. They sign in (or create an account) and join with one click. You can also add someone by email if they already have an account.</li>
+            <li><b>Wait for all 7.</b> The draft can't start until the league has exactly 7 players.</li>
+            <li><b>Start the draft.</b> When everyone is ready, the commissioner starts the draft from the Manage tab. The draft order is randomized unless you set it yourself.</li>
+          </ol>
+          <p class="rules-note">Drafts open once the regular season ends and the playoff teams are set. They close at the first playoff kickoff, so there is no drafting while games are being played.</p>`)}
+
+        ${sec('draft', 'The draft', `
+          <ul>
+            <li>It's a <b>snake draft</b>: the order reverses every round (1 to 7, then 7 to 1, and so on). There are 14 rounds.</li>
+            <li>Everyone joins the draft room together. The commissioner presses <b>Start draft</b> to start the clock, so nobody gets skipped while people are still arriving.</li>
+            <li>Each pick has a timer (30, 60 or 90 seconds, set when the league was created). When it runs out, the best-ranked player you're still allowed to take is picked for you and tagged <b>AUTO</b>.</li>
+            <li>The player list is ranked by <b>regular-season fantasy points</b>, so the best available players are at the top.</li>
+            <li>Teams you've already drafted from disappear from your list, and quarterbacks are disabled once you have two.</li>
+            <li>The commissioner can pause the clock, undo the last pick, or pick for someone who is away.</li>
+          </ul>`)}
+
+        ${sec('scoring', 'How points are calculated', `
+          <p style="margin-bottom:8px;">Points come from each player's real stats in his team's playoff games.</p>
+          <table class="rules-table">
+            <thead><tr><th>Stat</th><th>Points</th><th></th></tr></thead>
+            <tbody>${pts.map(r => `<tr><td>${r[0]}</td><td><b>${r[1]}</b></td><td class="x3">${r[2]}</td></tr>`).join('')}</tbody>
+          </table>
+          <p class="rules-note">Example: a running back with 80 rushing yards, 1 rushing touchdown, 3 catches for 25 yards scores 8 + 6 + 3 + 2.5 = <b>19.5 points</b>.</p>
+          <ul style="margin-top:10px;">
+            <li>Points are added up per round and per player. Your league's standings are ranked by total points.</li>
+            <li>Only offensive stats count. Defense, kicking and special teams do not.</li>
+            <li>When a player's team is eliminated, he stops scoring, but the points he already earned stay in your total.</li>
+            <li>Points update live while games are being played and are final when the game ends.</li>
+          </ul>`)}
+
+        ${sec('injuries', 'Injury replacements', `
+          <p style="margin-bottom:8px;">Rosters are locked, with one exception: if a player is <b>ruled out before his team's next game</b>, you can replace him.</p>
+          <ul>
+            <li>The replacement must come from the <b>same NFL team</b> and be a player nobody has drafted in your league. Position doesn't matter (the 2 QB limit still applies).</li>
+            <li>You must make the swap <b>before that game kicks off</b>. After kickoff, it's too late for that game.</li>
+            <li>This only covers players who are out <b>before</b> a game. A player who gets hurt <i>during</i> a game doesn't qualify.</li>
+            <li>The player you replace <b>keeps the points he already earned</b>. The replacement scores for you from the next game on, and his points are added to your total.</li>
+            <li>When one of your players is ruled out, a banner on your home page shows how long you have left to swap. Use the <b>My Roster</b> tab to do it.</li>
+          </ul>`)}
+
+        ${sec('tracking', 'Following your league', `
+          <ul>
+            <li><b>Home:</b> your rank, points and gap to first place in every league, plus the live games and upcoming schedule.</li>
+            <li><b>Standings:</b> the ranking with per-round scores, how far behind first place you are, and how many of your players are still alive. Click any member to see their roster.</li>
+            <li><b>All Rosters:</b> every member's 14 players with points by round. Players from eliminated teams are crossed out and show the round they went out.</li>
+            <li><b>My Roster:</b> your own players, plus the swap button when someone is ruled out.</li>
+            <li><b>Live:</b> the game in progress, your players' running points, game leaders, and how each member in your league is doing in that game.</li>
+          </ul>`)}
+
+        ${sec('faq', 'FAQ', `
+          <details><summary>What if my league doesn't have 7 players yet?</summary><p>The draft can't begin until it does. Share the invite link until it's full.</p></details>
+          <details><summary>Can I draft two players from the same team?</summary><p>No. You get exactly one player from each of the 14 playoff teams.</p></details>
+          <details><summary>What happens if I'm not around when it's my pick?</summary><p>The clock runs out and the best-ranked eligible player is drafted for you. The commissioner can also pick for you.</p></details>
+          <details><summary>Does a player who loses keep his points?</summary><p>Yes. Eliminated players stop adding points, but everything they earned stays in your total.</p></details>
+          <details><summary>Can I change my favorite team colors?</summary><p>Yes. Use the palette button in the top bar to pick your team's colors, NFL colors, or classic gold.</p></details>
+        `)}
+        <p class="x3" style="text-align:center;margin:1.5rem 0;">Questions or something not working? Ask your league's commissioner.</p>
+      </div>`;
+  }
+
   // ── Navbar ──
   function navbar() {
     return `
@@ -1481,6 +1597,7 @@
         </a>
         <div class="navbar-right">
           <a href="/live" data-link class="nav-link">Live</a>
+          <a href="/how-to-play" data-link class="nav-link">How to play</a>
           <a href="/admin" data-link class="nav-link" id="nav-admin-link" style="display:${isAdmin() ? 'inline-flex' : 'none'};">Admin</a>
           <span class="nav-link" id="nav-user">${getMe()?.email?.split('@')[0] || ''}</span>
           <button class="btn btn-ghost btn-sm" onclick="app.openTheme()" title="Theme">🎨</button>
