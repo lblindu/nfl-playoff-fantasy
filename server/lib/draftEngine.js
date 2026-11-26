@@ -20,6 +20,28 @@ async function draftWindowError(season) {
   return null;
 }
 
+// Roster rules: one player per NFL team, and exactly 2 quarterbacks.
+// A pick is illegal if it would make the second QB impossible to get (not enough teams left that
+// still have an undrafted QB), so a drafter is forced onto a QB before it is too late.
+function rosterRuleError({ player, myTeams, myQbs, pool, takenIds }) {
+  if (myTeams.has(player.nfl_team_id)) return 'You already drafted a player from that team';
+  const isQb = player.position === 'QB';
+  if (isQb && myQbs >= 2) return 'You already have 2 QBs';
+  const need = 2 - (myQbs + (isQb ? 1 : 0));
+  if (need > 0) {
+    const capable = new Set(pool
+      .filter(p => p.position === 'QB' && !takenIds.has(p.id) && p.id !== player.id
+        && p.nfl_team_id !== player.nfl_team_id && !myTeams.has(p.nfl_team_id))
+      .map(p => p.nfl_team_id));
+    if (capable.size < need) {
+      return isQb
+        ? 'Drafting this QB would leave you unable to get your second QB'
+        : `You still need ${need === 2 ? '2 QBs' : 'a second QB'} - draft a quarterback with this pick`;
+    }
+  }
+  return null;
+}
+
 // Snake order: who is on the clock for the next pick (pickCount = picks made so far)
 function memberOnClock(members, pickCount) {
   const n = members.length;
@@ -36,7 +58,7 @@ async function attemptPick({ leagueId, memberId, playerId, auto = false }) {
   const [{ data: picks }, { data: members }, { data: league }] = await Promise.all([
     supabase.from('draft_picks').select('id, player_id, member_id').eq('league_id', leagueId),
     supabase.from('league_members').select('id, draft_order, user_id').eq('league_id', leagueId).order('draft_order'),
-    supabase.from('leagues').select('id, status, pick_seconds').eq('id', leagueId).single(),
+    supabase.from('leagues').select('id, status, pick_seconds, season').eq('id', leagueId).single(),
   ]);
   if (!league) return { status: 404, error: 'League not found' };
 
@@ -53,16 +75,18 @@ async function attemptPick({ leagueId, memberId, playerId, auto = false }) {
   const { data: player } = await supabase.from('players').select('id, position, nfl_team_id').eq('id', playerId).single();
   if (!player) return { status: 404, error: 'Player not found' };
 
-  const { data: memberPicks } = await supabase
-    .from('draft_picks').select('players(position, nfl_team_id)')
-    .eq('league_id', leagueId).eq('member_id', memberId);
-
-  if ((memberPicks || []).some(p => p.players?.nfl_team_id === player.nfl_team_id)) {
-    return { status: 400, error: 'You already drafted a player from that team' };
-  }
-  if (player.position === 'QB' && (memberPicks || []).filter(p => p.players?.position === 'QB').length >= 2) {
-    return { status: 400, error: 'Maximum 2 QBs per roster' };
-  }
+  const [{ data: memberPicks }, { data: pool }] = await Promise.all([
+    supabase.from('draft_picks').select('players(position, nfl_team_id)').eq('league_id', leagueId).eq('member_id', memberId),
+    supabase.from('players').select('id, position, nfl_team_id').eq('season', league.season).eq('confirmed', true),
+  ]);
+  const ruleErr = rosterRuleError({
+    player,
+    myTeams: new Set((memberPicks || []).map(p => p.players?.nfl_team_id)),
+    myQbs: (memberPicks || []).filter(p => p.players?.position === 'QB').length,
+    pool: pool || [],
+    takenIds: new Set((picks || []).map(p => p.player_id)),
+  });
+  if (ruleErr) return { status: 400, error: ruleErr };
 
   const { data: pick, error } = await supabase
     .from('draft_picks')
@@ -100,11 +124,13 @@ async function chooseAutoPick(leagueId, memberId, season) {
   const taken = new Set((picks || []).map(p => p.player_id));
   const mine = (picks || []).filter(p => p.member_id === memberId);
   const myTeams = new Set(mine.map(p => p.players?.nfl_team_id));
-  const qbs = mine.filter(p => p.players?.position === 'QB').length;
+  const myQbs = mine.filter(p => p.players?.position === 'QB').length;
+  const pool = players || [];
 
-  return (players || [])
-    .filter(p => !taken.has(p.id) && !myTeams.has(p.nfl_team_id) && !(p.position === 'QB' && qbs >= 2))
-    .sort((a, b) => (a.overall_rank ?? 1e9) - (b.overall_rank ?? 1e9) || a.name.localeCompare(b.name))[0] || null;
+  return pool
+    .filter(p => !taken.has(p.id))
+    .sort((a, b) => (a.overall_rank ?? 1e9) - (b.overall_rank ?? 1e9) || a.name.localeCompare(b.name))
+    .find(p => !rosterRuleError({ player: p, myTeams, myQbs, pool, takenIds: taken })) || null;
 }
 
 // Runs every couple of seconds: when a clock runs out, pick for the member who timed out
@@ -148,4 +174,4 @@ function startDraftClock() {
   setInterval(tick, 2000);
 }
 
-module.exports = { draftWindowError, attemptPick, memberOnClock, startDraftClock, deadlineFrom, PICK_SECONDS, ROSTER_SIZE };
+module.exports = { rosterRuleError, draftWindowError, attemptPick, memberOnClock, startDraftClock, deadlineFrom, PICK_SECONDS, ROSTER_SIZE };

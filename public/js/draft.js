@@ -122,8 +122,28 @@ function getPickingState() {
   const myTurn = !!myMember && !!onClock && onClock.id === myMember.id;
   // Non-managers can only pick while the clock is running
   const canPick = !draftState.isDone && !!onClock && ((myTurn && clockRunning()) || isManager());
-  // Roster rules (one per team, QB cap) apply to whoever the pick is for
+  // Roster rules (one per team, exactly 2 QBs) apply to whoever the pick is for
   return { myMember, canPick, member: canPick ? onClock : myMember };
+}
+
+// Roster rules for the member a pick is for: one per team, exactly 2 QBs.
+// Returns '' if the player can be drafted, or a short reason (shown on the button).
+function blockReason(p, member) {
+  if (!member) return '';
+  const mine = draftState.picks.filter(x => x.member_id === member.id);
+  const myTeams = new Set(mine.map(x => x.players?.nfl_teams?.id).filter(Boolean));
+  const myQbs = mine.filter(x => x.players?.position === 'QB').length;
+  const isQb = p.position === 'QB';
+  if (isQb && myQbs >= 2) return 'QBs full';
+  const need = 2 - (myQbs + (isQb ? 1 : 0));
+  if (need > 0) {
+    const capable = new Set(playerList
+      .filter(x => x.position === 'QB' && !x.drafted && x.id !== p.id
+        && x.nfl_teams?.id !== p.nfl_teams?.id && !myTeams.has(x.nfl_teams?.id))
+      .map(x => x.nfl_teams?.id));
+    if (capable.size < need) return isQb ? 'Leaves no 2nd QB' : 'Need a QB';
+  }
+  return '';
 }
 
 function teamIdsOf(member) {
@@ -228,10 +248,12 @@ function renderTeamsLeft() {
   teams.sort((a, b) => a.abbr.localeCompare(b.abbr));
   const taken = teamIdsOf(member);
   const left = teams.filter(t => !taken.has(t.id));
+  const qbCount = draftState.picks.filter(p => p.member_id === member.id && p.players?.position === 'QB').length;
 
   el.innerHTML = `
     <div style="font-size:11px;color:var(--text-3);margin-bottom:4px;">
       Teams left for <b style="color:var(--text-2)">${member.display_name}</b>: ${left.length} of ${teams.length}
+      · QBs: <b style="color:${qbCount === 2 ? 'var(--green)' : 'var(--text-2)'}">${qbCount}/2</b>${qbCount < 2 && left.length <= 2 + (2 - qbCount) ? ' <span style="color:var(--gold);">(must draft QB)</span>' : ''}
       ${filterTeam ? ' · <a href="#" data-clear-team style="color:var(--gold);">show all</a>' : ''}
     </div>
     <div class="flex gap-1" style="flex-wrap:wrap;">
@@ -339,9 +361,6 @@ function renderPlayerList() {
 
   const takenTeams = teamIdsOf(member);
 
-  // QBs already on the roster the pick is for
-  const myQbCount = draftState.picks
-    .filter(p => p.member_id === member?.id && p.players?.position === 'QB').length;
 
   // Drafted players are gone for everyone; teams already on this roster are hidden
   let filtered = playerList.filter(p => !p.drafted && !takenTeams.has(p.nfl_teams?.id));
@@ -359,15 +378,15 @@ function renderPlayerList() {
 
   el.innerHTML = filtered.map(p => {
     const team = p.nfl_teams;
-    const isQbLimit = p.position === 'QB' && myQbCount >= 2;
-    const disabled = !canPick || isQbLimit;
+    const block = blockReason(p, member);
+    const disabled = !canPick || !!block;
     const color = team?.primary_color || '#555';
     return `
-      <div class="draft-pick" style="margin-bottom:6px;">
+      <div class="draft-pick" style="margin-bottom:6px;${block ? 'opacity:.45;' : ''}">
         <div style="width:4px;height:40px;background:${color};border-radius:2px;flex-shrink:0;"></div>
         <div class="player-avatar player-avatar-sm">${p.name[0]}</div>
         <div style="flex:1;min-width:0;">
-          <div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.name}</div>
+          <div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;${block ? 'text-decoration:line-through;' : ''}">${p.name}</div>
           <div class="flex items-center gap-1" style="margin-top:2px;">
             <span class="${posClass(p.position)}">${p.position}</span>
             ${team ? `<span style="font-size:11px;color:var(--text-3);">${team.abbr}</span>` : ''}
@@ -376,8 +395,8 @@ function renderPlayerList() {
           </div>
         </div>
         ${p.reg_season_points != null ? `<div style="text-align:right;min-width:44px;"><div style="font-size:13px;font-weight:600;color:var(--text);">${fmt(p.reg_season_points)}</div><div style="font-size:9px;color:var(--text-3);">REG PTS</div></div>` : ''}
-        <button class="btn btn-sm ${canPick ? 'btn-primary' : 'btn-ghost'}" ${disabled ? 'disabled' : ''} data-pick="${p.id}" title="${!canPick ? (clockRunning() ? 'Wait for your turn' : 'Waiting for the commissioner to start the clock') : isQbLimit ? 'QB limit reached (2 max)' : ''}">
-          ${!canPick ? 'Wait' : isQbLimit ? 'QB max' : 'Draft'}
+        <button class="btn btn-sm ${canPick ? 'btn-primary' : 'btn-ghost'}" ${disabled ? 'disabled' : ''} data-pick="${p.id}" title="${!canPick ? (clockRunning() ? 'Wait for your turn' : 'Waiting for the commissioner to start the clock') : block ? (block === 'QBs full' ? 'You already have 2 QBs' : block === 'Need a QB' ? 'You must draft a quarterback with this pick to end up with 2 QBs' : 'Drafting this QB would leave you unable to get your second QB') : ''}">
+          ${block ? block : !canPick ? 'Wait' : 'Draft'}
         </button>
       </div>
     `;

@@ -985,7 +985,7 @@
     let options;
     try {
       const pool = await api('GET', `/players?season=${ctx.league.season}&leagueId=${ctx.league.id}&teamId=${row.team.id}`);
-      options = pool.filter(p => !p.drafted && p.id !== row.player.id);
+      options = pool.filter(p => !p.drafted && p.id !== row.player.id && (p.position === 'QB') === (row.player.position === 'QB'));
     } catch (e) { return toast(e.message, 'error'); }
 
     // Admins can test with a past game when the team has no upcoming one
@@ -1517,7 +1517,7 @@
           <ul>
             <li>A league has <b>exactly 7 players</b>.</li>
             <li>Each player drafts <b>14 players</b>: exactly one from each of the 14 playoff teams.</li>
-            <li>You can have <b>at most 2 quarterbacks</b>. Every other position (RB, WR, TE) is open, so build the roster however you like.</li>
+            <li>You need <b>exactly 2 quarterbacks</b> on your roster. The other 12 spots are open: RB, WR or TE, however you like.</li>
             <li>A player can only be drafted once per league. Once he's taken, he's gone for everyone else.</li>
             <li>Your total is the sum of your players' points across all four rounds: Wild Card, Divisional, Conference Championships and the Super Bowl.</li>
             <li>Rosters are locked after the draft. The only change allowed is an injury replacement (see below).</li>
@@ -1539,7 +1539,7 @@
             <li>Everyone joins the draft room together. The commissioner presses <b>Start draft</b> to start the clock, so nobody gets skipped while people are still arriving.</li>
             <li>Each pick has a timer (30, 60 or 90 seconds, set when the league was created). When it runs out, the best-ranked player you're still allowed to take is picked for you and tagged <b>AUTO</b>.</li>
             <li>The player list is ranked by <b>regular-season fantasy points</b>, so the best available players are at the top.</li>
-            <li>Teams you've already drafted from disappear from your list, and quarterbacks are disabled once you have two.</li>
+            <li>Teams you've already drafted from disappear from your list. Once you have 2 QBs, all other quarterbacks are crossed out. If you're running out of picks without 2 QBs, everything except quarterbacks is disabled and the draft room tells you that you must take a QB.</li>
             <li>The commissioner can pause the clock, undo the last pick, or pick for someone who is away.</li>
           </ul>`)}
 
@@ -1560,7 +1560,7 @@
         ${sec('injuries', 'Injury replacements', `
           <p style="margin-bottom:8px;">Rosters are locked, with one exception: if a player is <b>ruled out before his team's next game</b>, you can replace him.</p>
           <ul>
-            <li>The replacement must come from the <b>same NFL team</b> and be a player nobody has drafted in your league. Position doesn't matter (the 2 QB limit still applies).</li>
+            <li>The replacement must come from the <b>same NFL team</b> and be a player nobody has drafted in your league. Position is flexible except for quarterbacks: a QB can only be replaced by a QB, and a non-QB can't be replaced by a QB, so you always keep exactly 2.</li>
             <li>You must make the swap <b>before that game kicks off</b>. After kickoff, it's too late for that game.</li>
             <li>This only covers players who are out <b>before</b> a game. A player who gets hurt <i>during</i> a game doesn't qualify.</li>
             <li>The player you replace <b>keeps the points he already earned</b>. The replacement scores for you from the next game on, and his points are added to your total.</li>

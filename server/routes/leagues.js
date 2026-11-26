@@ -286,11 +286,12 @@ router.post('/:id/swap', async (req, res) => {
   ]);
   if (drafted?.length || swappedIn?.length) return res.status(409).json({ error: 'That player is already on a roster in this league' });
 
-  // Position is free, but the roster still can't exceed 2 QBs
-  if (inP.position === 'QB') {
-    const { data: roster } = await supabase.from('players').select('id, position').in('id', activeIds);
-    const qbs = (roster || []).filter(p => p.position === 'QB' && p.id !== outPlayerId).length;
-    if (qbs >= 2) return res.status(400).json({ error: 'Maximum 2 QBs per roster' });
+  // Position is free except that every roster keeps exactly 2 QBs: a QB is replaced by a QB, and a
+  // non-QB can't be replaced by a QB
+  if ((outP.position === 'QB') !== (inP.position === 'QB')) {
+    return res.status(400).json({ error: outP.position === 'QB'
+      ? 'A quarterback must be replaced by another quarterback (rosters need exactly 2 QBs)'
+      : 'A non-QB can\'t be replaced by a quarterback (rosters need exactly 2 QBs)' });
   }
 
   // The swap takes effect for the team's next game, and must be made before it kicks off
